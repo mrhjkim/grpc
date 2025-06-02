@@ -32,7 +32,9 @@
 #include <string>
 #include <thread>
 
+#include "absl/flags/flag.h"
 #include "absl/flags/parse.h"
+#include "absl/log/check.h"
 #include "absl/log/initialize.h"
 #include "helper.h"
 #ifdef BAZEL_BUILD
@@ -40,6 +42,8 @@
 #else
 #include "route_guide.grpc.pb.h"
 #endif
+
+ABSL_FLAG(std::string, target, "localhost:50051", "Server address");
 
 using grpc::Channel;
 using grpc::ClientContext;
@@ -139,7 +143,8 @@ class RouteGuideClient {
       Status status_;
       bool done_ = false;
     };
-    Reader reader(stub_.get(), kCoordFactor_, rect);
+    Reader reader(stub_.get(), kCoordFactor_, rect); // Constructor() -> stub->async()->ListFeatures() -> StartRead() -> StartCall() -> OnReadDone() -> StartRead() -> OnReadDone() -> StartRead() : 모든 처리 후-> OnDone() -> cv_.notify_one() -> Await()
+    
     Status status = reader.Await();
     if (status.ok()) {
       std::cout << "ListFeatures rpc succeeded." << std::endl;
@@ -350,8 +355,9 @@ int main(int argc, char** argv) {
   absl::InitializeLog();
   // Expect only arg: --db_path=path/to/route_guide_db.json.
   std::string db = routeguide::GetDbFileContent(argc, argv);
+  std::string target_str = absl::GetFlag(FLAGS_target);
   RouteGuideClient guide(
-      grpc::CreateChannel("localhost:50051",
+      grpc::CreateChannel(target_str,
                           grpc::InsecureChannelCredentials()),
       db);
 

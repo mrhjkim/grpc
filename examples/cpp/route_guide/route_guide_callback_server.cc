@@ -112,7 +112,7 @@ class RouteGuideImpl final : public RouteGuide::CallbackService {
 
       void OnCancel() override { LOG(ERROR) << "RPC Cancelled"; }
     };
-    return new Reactor(*point, feature_list_, feature);
+    return new Reactor(*point, feature_list_, feature); // Constructor() -> Finish() -> OnDone() : delete this
   }
 
   /* Alternate simple implementation of GetFeature that uses the DefaultReactor.
@@ -184,7 +184,7 @@ class RouteGuideImpl final : public RouteGuide::CallbackService {
       const std::vector<Feature>* feature_list_;
       std::vector<Feature>::const_iterator next_feature_;
     };
-    return new Lister(rectangle, &feature_list_);
+    return new Lister(rectangle, &feature_list_); // Constructor() -> NextWrite() -> StartWrite() -> OnWriteDone() -> NextWrite() -> StartWrite() -> OnWriteDone() -> NextWrite() : 모든 처리 후-> Finish() -> OnDone() : delete this
   }
 
   grpc::ServerReadReactor<Point>* RecordRoute(CallbackServerContext* context,

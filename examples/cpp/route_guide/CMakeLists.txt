@@ -79,6 +79,8 @@ foreach(_target
   target_link_libraries(${_target}
     rg_grpc_proto
     route_guide_helper
+    absl::check
+    absl::flags
     absl::flags_parse
     absl::absl_log
     absl::log_initialize

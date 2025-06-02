@@ -11,3 +11,6 @@ README files.
 [Hello World]: helloworld
 [Quick Start]: https://grpc.io/docs/languages/cpp/quickstart
 [Route Guide]: route_guide
+
+### Docker base image build from grpc root directory
+docker build -t ubuntu_grpc_dev:22.04 -f ./examples/cpp/Dockerfile .
