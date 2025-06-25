@@ -1,8 +1,10 @@
 # gRPC SKT-IN Interface Library
 
 SCPAS/SRG 등 외부 노드와 OCS 내부 Pod 간의 통신에  gRPC 방식을 사용할 것으로 보입니다.
+
 기존 프로세스는 대부분 C언어로 개발되었으나 gRPC는 Go, C++ 등의 언어를 지원하지만
 C언어는 지원하지 않기 때문에 직접적으로 gRPC 기능 개발이 불가능한 상황입니다.
+
 이에 C언어에서 호환 가능한 Library를 구현했습니다.
 
 ## C++ 를 기반으로 gRPC API 구현
@@ -18,14 +20,22 @@ C언어는 지원하지 않기 때문에 직접적으로 gRPC 기능 개발이 �
 ## 테스트 방법
 
 ### build
+
 cd cmake/build
+
 cmake -DCMAKE_PREFIX_PATH=$MY_INSTALL_DIR ../..
+
 make
 
 ### test server 실행
+
 C++ 버전: ./test_server_c++ [--ip=IP] [--port=PORT]
+
 C 버전  : ./test_server_c [-i IP] [-p PORT]
 
 ### test client 실행
+
 C++ 버전 : ./test_client_c++ [--target=IP:PORT]
+
 C 버전   : ./test_client_c [-i IP] [-p PORT]
+
