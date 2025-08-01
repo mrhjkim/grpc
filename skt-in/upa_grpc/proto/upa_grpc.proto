@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "io.grpc.skt-in.upa_grpc";
+option java_outer_classname = "UpaGrpcProto";
+option objc_class_prefix = "UPA_GRPC";
+
+package upa_grpc;
+
+// The any type messages over gRPC
+enum MsgType {
+  MSG_TYPE_DBIF = 0;
+  MSG_TYPE_MMIF = 1;
+  MSG_TYPE_TCP = 2;
+  MSG_TYPE_DIAMETER = 3;
+  MSG_TYPE_SIP = 4;
+}
+
+message Message {
+  MsgType msg_type = 1;
+  string src_id = 2;
+  string dst_id = 3;
+  string route_key = 4;
+  string session_key = 5;
+  bytes data = 6;  
+}
+
+// services of gRPC Protocol Adapter
+service UpaGrpcService {
+  rpc SendMessage (Message) returns (Message) {}
+}
