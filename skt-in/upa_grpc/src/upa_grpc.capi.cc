@@ -136,6 +136,12 @@ int upa_grpc_client_wait_for_connected(upa_grpc_client_handler handler,
   return static_cast<UpaGrpcClient*>(handler)->WaitForConnected(wait_sec);
 }
 
+void upa_grpc_client_set_reconnect_backoff(upa_grpc_client_handler handler,
+                                           int min, int max) {
+  if (!handler) return;
+  static_cast<UpaGrpcClient*>(handler)->SetReconnectBackoff(min, max);
+}
+
 int upa_grpc_client_send(upa_grpc_client_handler handler,
                                upa_grpc_client_context_t* context,
                                upa_grpc_message_t* request,

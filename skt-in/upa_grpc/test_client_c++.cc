@@ -71,6 +71,7 @@ int main(int argc, char** argv) {
   int wait_time = absl::GetFlag(FLAGS_wait_time);
 
   UpaGrpcClient client(target_str, MSG_TYPE_DBIF);
+  client.SetReconnectBackoff(5000, 5000);
 
   int rv = client.Start();
   if (rv < 0) return rv;

@@ -71,6 +71,8 @@ class UpaGrpcClient {
   void Stop();
   int GetState();
   bool WaitForConnected(int wait_sec);
+  void SetReconnectBackoff(int min, int max);
+
 
   int Send(UpaGrpcClientContext* context, upa_grpc::Message* request,
            upa_grpc::Message* response, UpaGrpcClientCallback callback);
@@ -78,6 +80,8 @@ class UpaGrpcClient {
  private:
   std::string target_;
   upa_grpc::MsgType msg_type_;
+  int min_backoff_; // min reconnect backoff time (msec)
+  int max_backoff_; // max reconnect backoff time (msec)
   std::shared_ptr<grpc::Channel> channel_ = nullptr;
   std::unique_ptr<upa_grpc::UpaGrpcService::Stub> stub_ = nullptr;
 };

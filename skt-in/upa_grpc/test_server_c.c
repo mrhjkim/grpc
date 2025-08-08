@@ -59,7 +59,7 @@ int onServiceRequest(const void* req, void* res) {
 int _get_opt(int argc, char** argv) {
   int rv = 0;
   long val_l;
-  char c;
+  unsigned char c;
 
   while ((c = getopt(argc, argv, "i:p:t:hH")) != 0xFF) {
     switch (c) {

@@ -34,7 +34,7 @@ void onServiceResponse(int rv, void* res) {
 int _get_opt(int argc, char** argv) {
   int rv = 0;
   long val_l;
-  char c;
+  unsigned char c;
 
   while ((c = getopt(argc, argv, "i:p:t:hH")) != 0xFF) {
     switch (c) {
@@ -120,6 +120,8 @@ int main(int argc, char** argv) {
   if ((rv = _get_opt(argc, argv)) < 0) return rv;
   upa_grpc_client_handler handler =
       upa_grpc_client_create(_g_ip, _g_port, UPA_GRPC_MSG_TYPE_DBIF);
+
+  upa_grpc_client_set_reconnect_backoff(handler, 5000, 5000);
 
   rv = upa_grpc_client_start(handler);
   if (rv < 0) return rv;

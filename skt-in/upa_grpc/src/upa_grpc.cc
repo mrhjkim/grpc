@@ -118,7 +118,20 @@ int UpaGrpcClient::Start() {
     return 1;
   }
 
-  channel_ = grpc::CreateChannel(target_, grpc::InsecureChannelCredentials());
+  if (min_backoff_ > 0 || max_backoff_ > 0) {
+    grpc::ChannelArguments args;
+    if (min_backoff_ > 0) {
+      args.SetInt(GRPC_ARG_INITIAL_RECONNECT_BACKOFF_MS, min_backoff_);
+      args.SetInt(GRPC_ARG_MIN_RECONNECT_BACKOFF_MS, min_backoff_);
+    }
+    if (max_backoff_ > 0) {
+      args.SetInt(GRPC_ARG_MAX_RECONNECT_BACKOFF_MS, max_backoff_);
+    }
+    channel_ = grpc::CreateCustomChannel(
+        target_, grpc::InsecureChannelCredentials(), args);
+  } else {
+    channel_ = grpc::CreateChannel(target_, grpc::InsecureChannelCredentials());
+  }
   if (channel_ == nullptr) {
     std::cout << "Create channel failed. target(" << target_ << ")"
               << std::endl;
@@ -148,6 +161,11 @@ bool UpaGrpcClient::WaitForConnected(int wait_sec) {
   std::chrono::time_point deadline =
       std::chrono::system_clock::now() + std::chrono::seconds(wait_sec);
   return channel_->WaitForConnected(deadline);
+}
+
+void UpaGrpcClient::SetReconnectBackoff(int min, int max) {
+  if( min >= 0 ) min_backoff_ = min;
+  if( max >= 0 ) max_backoff_ = max;
 }
 
 int UpaGrpcClient::Send(UpaGrpcClientContext* context, Message* request,
