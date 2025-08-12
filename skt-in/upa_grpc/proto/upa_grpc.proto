@@ -27,5 +27,5 @@ message Message {
 
 // services of gRPC Protocol Adapter
 service UpaGrpcService {
-  rpc SendMessage (Message) returns (Message) {}
+  rpc SendMessage (stream Message) returns (stream Message) {}
 }

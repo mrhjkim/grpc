@@ -13,21 +13,23 @@ struct TestData {
 
 char _g_ip[32] = {"127.0.0.1"};
 unsigned short _g_port = 50051;
-int _g_wait_time = 0;
 
-void onServiceResponse(int rv, void* res) {
-  printf("onServiceResponse ... rv=%d\n", rv );
+void onServiceResponse(void* res) {
+  printf("onServiceResponse ...\n");
 
-  if (!rv && res) {
-    upa_grpc_message_t* response = (upa_grpc_message_t*)res;
-    size_t data_size;
-    const char* data = upa_grpc_message_get_data(response, &data_size);
-    if (data_size == sizeof(struct TestData)) {
-      struct TestData resData;
-      memcpy(&resData, data, data_size);
-      printf(" Response TestData = [%d, %lf, %s]\n", resData.id, resData.value,
-             resData.name);
-    }
+  if (!res) return;
+
+  upa_grpc_message_t* response = (upa_grpc_message_t*)res;
+
+  upa_grpc_message_print(response, 0);
+
+  size_t data_size;
+  const char* data = upa_grpc_message_get_data(response, &data_size);
+  if (data_size == sizeof(struct TestData)) {
+    struct TestData resData;
+    memcpy(&resData, data, data_size);
+    printf(" Response TestData = [%d, %lf, %s]\n", resData.id, resData.value,
+           resData.name);
   }
 }
 
@@ -55,15 +57,6 @@ int _get_opt(int argc, char** argv) {
         }
         _g_port = (unsigned short)val_l;
         break;
-        case 't':
-        val_l = strtol(optarg, NULL, 0);
-        if (val_l < 0 || val_l > 3600) {
-          printf("Invalid wait timer. val='%s'\n", optarg);
-          rv = -1;
-          goto final;
-        }
-        _g_wait_time = (int)val_l;
-        break;
       case 'h':
       case 'H':
         rv = -2;
@@ -80,22 +73,21 @@ final:
       pname = argv[0];
     }
     printf(
-        "\nUsage: %s [-i IP] [-p Port] [-t wait-sec] [-h|-H]\n"
+        "\nUsage: %s [-i IP] [-p Port] [-h|-H]\n"
         "    \"-i\"  listen IP address  (Default : 0.0.0.0)\n"
-        "    \"-p\"  listen port number (Default : 50051)\n"
-        "    \"-t\"  wait response time (Default : 0 sec)\n",
+        "    \"-p\"  listen port number (Default : 50051)\n",
         pname);
   }
   return rv;
 }
 
-void sendTestMessage(upa_grpc_client_handler handler, int wait_time) {
+void sendTestMessage(upa_grpc_client_handler handler) {
   while (!upa_grpc_client_wait_for_connected(handler, 5)) {
     printf("Wating for channel to be ready...\n");
+    upa_grpc_client_stop_reactor(handler, 1);
   }
   printf("Current channel status is %d.\n", upa_grpc_client_get_state(handler));
 
-  upa_grpc_client_context_t* context = upa_grpc_client_context_alloc(wait_time);
   upa_grpc_message_t* request = upa_grpc_message_alloc();
   upa_grpc_message_set_src_id(request, "SCPAS2P");
   upa_grpc_message_set_route_key(request, "01067003951");
@@ -103,36 +95,35 @@ void sendTestMessage(upa_grpc_client_handler handler, int wait_time) {
   printf(" Request TestData = [%d, %lf, %s]\n", data.id, data.value, data.name);
   upa_grpc_message_set_data(request, (void*)&data, sizeof(data));
 
-  upa_grpc_message_t* response = upa_grpc_message_alloc();
-  int rv = upa_grpc_client_send(handler, context, request, response,
-                                onServiceResponse);
+  upa_grpc_message_print(request, 1);
 
-  rv = upa_grpc_client_context_wait(context);
-  printf("Wait ServiceResponse message. rv=%d\n", rv);
-  upa_grpc_client_context_destroy(context);
-  upa_grpc_message_destroy(request);
-  upa_grpc_message_destroy(response);
+  int rv = upa_grpc_client_send(handler, request);
+  if( rv < 0 ) upa_grpc_message_destroy(request);
 }
 
 int main(int argc, char** argv) {
   int rv;
 
   if ((rv = _get_opt(argc, argv)) < 0) return rv;
-  upa_grpc_client_handler handler =
-      upa_grpc_client_create(_g_ip, _g_port, UPA_GRPC_MSG_TYPE_DBIF);
+  upa_grpc_client_handler handler = upa_grpc_client_create(
+      _g_ip, _g_port, UPA_GRPC_MSG_TYPE_DBIF, onServiceResponse);
 
   upa_grpc_client_set_reconnect_backoff(handler, 5000, 5000);
 
   rv = upa_grpc_client_start(handler);
   if (rv < 0) return rv;
-  sendTestMessage(handler, _g_wait_time);
+  sleep(5);
+  sendTestMessage(handler);
+  sleep(1);
   upa_grpc_client_stop(handler);
 
   sleep(5);
 
   rv = upa_grpc_client_start(handler);
   if (rv < 0) return rv;
-  sendTestMessage(handler, _g_wait_time);
+  sleep(5);
+  sendTestMessage(handler);
+  sleep(1);
   upa_grpc_client_stop(handler);
 
   return 0;

@@ -99,18 +99,49 @@ void PrintMessage(const Message* msg, bool is_send) {
 }
 
 // Implementation of the UpaGrpcClient class.
-int UpaGrpcClientContext::Wait() {
-  std::unique_lock<std::mutex> lock(mu_);
-  cv_.wait(lock, [this] { return this->done_; });
-  return result_;
-}
+class UpaGrpcClientReactor : public UpaGrpcClientReactorClass {
+ public:
+  explicit UpaGrpcClientReactor(UpaGrpcService::Stub* stub,
+                                UpaGrpcClientCallback callback, UpaGrpcClient* owner)
+      : stub_(stub), callback_(callback), owner_(owner) {
+    // Start the RPC; the library will call OnDone/OnReadDone/OnWriteDone
+    stub_->async()->SendMessage(&ctx_, this);
 
-void UpaGrpcClientContext::Done(grpc::StatusCode result) {
-  std::unique_lock<std::mutex> lock(mu_);
-  done_ = true;
-  result_ = result;
-  cv_.notify_all();
-}
+    StartRead(&read_msg_);  // Start reading
+    StartCall();
+  }
+  ~UpaGrpcClientReactor() {
+    if( owner_) owner_->StopReactor(false);
+  }
+
+  void OnReadDone(bool ok) override {
+    if (!ok) {  // Server closed its write side
+      return;
+    }
+
+    callback_(&read_msg_);
+
+    StartRead(&read_msg_);  // Continue reading
+  }
+
+  void OnWriteDone(bool /*ok*/) override {
+    // write failed or stream closed by server
+  }
+
+  void OnDone(const grpc::Status& status) override {
+    std::cout << "Closed channel. peer[" << ctx_.peer() << "]"
+              << std::endl;
+    // RPC failed or finished cleanly
+    delete this;
+  }
+
+ private:
+  UpaGrpcService::Stub* stub_;
+  UpaGrpcClientCallback callback_;
+  UpaGrpcClient* owner_;
+  grpc::ClientContext ctx_;
+  Message read_msg_;
+};
 
 int UpaGrpcClient::Start() {
   if (channel_ != nullptr) {
@@ -139,10 +170,11 @@ int UpaGrpcClient::Start() {
   }
   stub_ = UpaGrpcService::NewStub(channel_);
 
-  return 0;
+  return StartReactor();
 }
 
 void UpaGrpcClient::Stop() {
+  StopReactor(true);
   if (channel_ != nullptr) {
     channel_.reset();
     channel_ = nullptr;
@@ -150,6 +182,30 @@ void UpaGrpcClient::Stop() {
   if (stub_ != nullptr) {
     stub_.reset();
     stub_ = nullptr;
+  }
+}
+
+int UpaGrpcClient::StartReactor() {
+  if (reactor_ != nullptr) {
+    std::cout << "Already created reactor." << std::endl;
+    return 1;
+  }
+  if (stub_ == nullptr || channel_ == nullptr) {
+    std::cout << "Not created channel." << std::endl;
+    return -1;
+  }
+
+  reactor_ = new UpaGrpcClientReactor(stub_.get(), callback_, this);
+
+  return 0;
+}
+
+void UpaGrpcClient::StopReactor(bool sendDoneFlag) {
+  if(reactor_ != nullptr) {
+    if (sendDoneFlag == true) {
+      reactor_->StartWritesDone();  // Inform server we are done sending
+    }
+    reactor_ = nullptr;
   }
 }
 
@@ -164,33 +220,20 @@ bool UpaGrpcClient::WaitForConnected(int wait_sec) {
 }
 
 void UpaGrpcClient::SetReconnectBackoff(int min, int max) {
-  if( min >= 0 ) min_backoff_ = min;
-  if( max >= 0 ) max_backoff_ = max;
+  if (min >= 0) min_backoff_ = min;
+  if (max >= 0) max_backoff_ = max;
 }
 
-int UpaGrpcClient::Send(UpaGrpcClientContext* context, Message* request,
-                        Message* response, UpaGrpcClientCallback callback) {
-  request->set_msg_type(msg_type_);
-  PrintMessage(request, true);
+int UpaGrpcClient::Send(Message* msg) {
+  if (reactor_ == nullptr) StartReactor();
+  if (reactor_ == nullptr) return -1;
 
-  stub_->async()->SendMessage(
-      &context->base, request, response,
-      [context, request, response, callback](grpc::Status status) {
-        if (status.ok()) {
-          PrintMessage(response, false);
-        } else {
-          std::cout << status.error_code() << ": " << status.error_message()
-                    << std::endl;
-        }
+  msg->set_msg_type(msg_type_);
 
-        callback(status.error_code(), response);
-
-        context->Done(status.error_code());
-      });
+  reactor_->StartWrite(msg);
 
   return 0;
 }
-
 
 // Implementation of the UpaGrpcServer class.
 class UpaGrpcServiceImpl final : public UpaGrpcService::CallbackService {
@@ -198,27 +241,68 @@ class UpaGrpcServiceImpl final : public UpaGrpcService::CallbackService {
   UpaGrpcServiceImpl(MsgType msg_type, UpaGrpcServerCallback callback)
       : msg_type_(msg_type), callback_(callback) {}
 
-  grpc::ServerUnaryReactor* SendMessage(grpc::CallbackServerContext* context,
-                                        const Message* request,
-                                        Message* response) override {
-    std::cout << "Receive message from " << context->peer() << std::endl;
+  // TODO : accept / close callback을 적절히 잘 넣으면 될 듯
+  // -- SetAcctptCallback, SetCloseCallback
 
-    if (request->msg_type() != msg_type_) {
-      std::cout << "Invalid type(" << request->msg_type()
-                << ") message received. drop the message." << std::endl;
-      grpc::ServerUnaryReactor* reactor = context->DefaultReactor();
-      reactor->Finish(grpc::Status::CANCELLED);
-      return reactor;
-    }
+  // This function is called by gRPC when a new RPC arrives
+  UpaGrpcServerReactorClass* SendMessage(
+      grpc::CallbackServerContext* context) override {
 
-    PrintMessage(request, false);
-    int rv = callback_(request, response);
-    if (!rv) {
-      PrintMessage(response, true);
-    }
-    grpc::ServerUnaryReactor* reactor = context->DefaultReactor();
-    reactor->Finish(grpc::Status::OK);
-    return reactor;
+    std::cout << "Accepted channel. peer[" << context->peer() << "]"
+              << std::endl;
+
+    class Reactor : public UpaGrpcServerReactorClass {
+     public:
+      Reactor(grpc::CallbackServerContext* context, MsgType msg_type,
+              UpaGrpcServerCallback callback)
+          : context_(context), msg_type_(msg_type), callback_(callback) {
+        peer_ = context->peer();
+        // Start readind the first message
+        StartRead(&read_msg_);
+      }
+      ~Reactor() {}
+
+      void OnReadDone(bool ok) override {
+        if (!ok) {  // Client closed the write side
+          Finish(grpc::Status::OK);
+          return;
+        }
+
+        // Process incoming message
+        if (read_msg_.msg_type() != msg_type_) {
+          std::cout << "Invalid type(" << read_msg_.msg_type()
+                    << ") message received. drop the message." << std::endl;
+          Finish(grpc::Status::CANCELLED);
+          return;
+        }
+
+        int rv = callback_(context_, &read_msg_, this);
+        if (!rv) {  // Continue reading more messages
+          StartRead(&read_msg_);
+        } else {
+          Finish(grpc::Status::OK);  // Internal error
+        }
+      }
+
+      void OnWriteDone(bool /*ok*/) override {
+        // write failed or stream closed by client
+      }
+
+      void OnDone() override {
+        std::cout << "Closed channel. peer[" << peer_ << "]" << std::endl;
+        // RPC finished
+        delete this;
+      }
+
+     private:
+      grpc::CallbackServerContext* context_;
+      MsgType msg_type_;
+      UpaGrpcServerCallback callback_;
+      std::string peer_;
+      Message read_msg_;
+    };
+
+    return new Reactor(context, msg_type_, callback_);
   }
 
  private:
@@ -250,6 +334,7 @@ int UpaGrpcServer::Run() {
   std::cout << "Server listening on " << addr_ << std::endl;
 
   server_->Wait();
+  std::cout << "Finish server waiting." << std::endl;
   return 0;
 }
 
@@ -269,4 +354,8 @@ void UpaGrpcServer::Stop() {
   }
 }
 
-
+int UpaGrpcServerSend(UpaGrpcServerReactorClass* reactor, Message* msg) {
+  if (reactor == nullptr || msg == nullptr) return -1;
+  reactor->StartWrite(msg);
+  return 0;
+}

@@ -88,30 +88,17 @@ void upa_grpc_message_print(const upa_grpc_message_t* msg, int is_send) {
 }
 
 // C API of the gRPC Protocol Adapter Client class.
-upa_grpc_client_context_t* upa_grpc_client_context_alloc(int wait_sec) {
-  return new UpaGrpcClientContext(wait_sec);
-}
-
-void upa_grpc_client_context_destroy(upa_grpc_client_context_t* context) {
-  if (context) delete static_cast<UpaGrpcClientContext*>(context);
-}
-
-int upa_grpc_client_context_wait(upa_grpc_client_context_t* context) {
-  if (!context) return -1;
-  return static_cast<UpaGrpcClientContext*>(context)->Wait();
-}
-
-upa_grpc_client_handler upa_grpc_client_create(const char* ip,
-                                               unsigned short port,
-                                               upa_grpc_msg_type_e msg_type) {
+upa_grpc_client_handler upa_grpc_client_create(
+    const char* ip, unsigned short port, upa_grpc_msg_type_e msg_type,
+    upa_grpc_client_callback_f callback) {
   if (!ip) return NULL;
-  return new UpaGrpcClient(ip, port, static_cast<MsgType>(msg_type));
+  return new UpaGrpcClient(ip, port, static_cast<MsgType>(msg_type), callback);
 }
 /*
 upa_grpc_client_handler upa_grpc_client_create(const char* target,
-                                               upa_grpc_msg_type_e msg_type) {
+                                               upa_grpc_msg_type_e msg_type, upa_grpc_client_callback_f callback) {
   if (!target) return NULL;
-  return new UpaGrpcClient(target, static_cast<MsgType>(msg_type));
+  return new UpaGrpcClient(target, static_cast<MsgType>(msg_type), callback);
 }
 */
 
@@ -123,6 +110,18 @@ int upa_grpc_client_start(upa_grpc_client_handler handler) {
 void upa_grpc_client_stop(upa_grpc_client_handler handler) {
   if (!handler) return;
   static_cast<UpaGrpcClient*>(handler)->Stop();
+}
+
+int upa_grpc_client_start_reactor(upa_grpc_client_handler handler) {
+  if (!handler) return -1;
+  return static_cast<UpaGrpcClient*>(handler)->StartReactor();
+}
+
+void upa_grpc_client_stop_reactor(upa_grpc_client_handler handler,
+                                  int send_done_flag) {
+  if (!handler) return;
+  static_cast<UpaGrpcClient*>(handler)->StopReactor(
+      static_cast<bool>(send_done_flag));
 }
 
 int upa_grpc_client_get_state(upa_grpc_client_handler handler) {
@@ -143,15 +142,12 @@ void upa_grpc_client_set_reconnect_backoff(upa_grpc_client_handler handler,
 }
 
 int upa_grpc_client_send(upa_grpc_client_handler handler,
-                               upa_grpc_client_context_t* context,
-                               upa_grpc_message_t* request,
-                               upa_grpc_message_t* response,
-                               upa_grpc_client_callback_f callback) {
-  if (!handler || !context || !request || !response || !callback) return -1;
-  return static_cast<UpaGrpcClient*>(handler)->Send(
-      static_cast<UpaGrpcClientContext*>(context),
-      static_cast<Message*>(request), static_cast<Message*>(response),
-      callback);
+                         upa_grpc_message_t* msg) {
+  if (!handler || !msg) return -1;
+  int rv =
+      static_cast<UpaGrpcClient*>(handler)->Send(static_cast<Message*>(msg));
+  if (rv == 0) upa_grpc_message_destroy(msg);
+  return rv;
 }
 
 // C API of OcsInterfaceServer
@@ -183,6 +179,14 @@ void upa_grpc_server_start(upa_grpc_server_handler handler) {
 void upa_grpc_server_stop(upa_grpc_server_handler handler) {
   if (!handler) return;
   static_cast<UpaGrpcServer*>(handler)->Stop();
+}
+
+int upa_grpc_server_send(upa_grpc_server_reactor_t* ract,
+                         upa_grpc_message_t* msg) {
+  int rv = UpaGrpcServerSend(static_cast<UpaGrpcServerReactorClass*>(ract),
+                             static_cast<Message*>(msg));
+  if (rv == 0) upa_grpc_message_destroy(msg);
+  return rv;
 }
 
 }  // extern "C"

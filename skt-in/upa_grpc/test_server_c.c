@@ -15,9 +15,10 @@ char _g_ip[32] = { "0.0.0.0"};
 unsigned short _g_port = 50051;
 int _g_wait_time = 0;
 
-int onServiceRequest(const void* req, void* res) {
-  if (!req || !res) {
-    printf("%s : Invalid parameters. req=%p, res=%p\n", __func__, req, res);
+int onServiceRequest(void* ctx, const void* req, void* ract) {
+  if (!ctx || !req || !ract) {
+    printf("%s : Invalid parameters. ctx=%p, req=%p, ract=%p\n", __func__, ctx,
+           req, ract);
     return -1;
   }
 
@@ -26,8 +27,12 @@ int onServiceRequest(const void* req, void* res) {
     sleep(_g_wait_time);
   }
 
+  upa_grpc_server_context_t* context = (upa_grpc_server_context_t*)ctx;
   const upa_grpc_message_t* request = (const upa_grpc_message_t*)req;
-  upa_grpc_message_t* response = (upa_grpc_message_t*)res;
+  upa_grpc_server_reactor_t* reactor = (upa_grpc_server_reactor_t*)ract;
+  upa_grpc_message_t* response = upa_grpc_message_alloc();
+
+  upa_grpc_message_print(request, 0);
 
   struct TestData data;
   size_t data_size;
@@ -53,6 +58,11 @@ int onServiceRequest(const void* req, void* res) {
          data.name, sizeof(data));
   upa_grpc_message_set_data(response, (const char*)&data, sizeof(data));
 
+  upa_grpc_message_print(response, 1);
+
+  if( upa_grpc_server_send(reactor, response) < 0 ) {
+    upa_grpc_message_destroy(response);
+  }
   return 0;
 }
 
