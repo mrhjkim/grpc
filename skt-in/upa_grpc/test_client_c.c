@@ -14,12 +14,15 @@ struct TestData {
 char _g_ip[32] = {"127.0.0.1"};
 unsigned short _g_port = 50051;
 
-void onServiceResponse(void* res) {
-  printf("onServiceResponse ...\n");
-
-  if (!res) return;
+int onServiceResponse(const void* res, void* owner, void*) {
+  if (!res || !owner) return -1;
 
   upa_grpc_message_t* response = (upa_grpc_message_t*)res;
+  upa_grpc_client_handler client = (upa_grpc_client_handler)owner;
+
+  printf("onServiceResponse... name[%s], msg_type[%s]\n",
+         upa_grpc_client_get_name(client),
+         upa_grpc_msg_type_str(upa_grpc_client_get_msg_type(client)));
 
   upa_grpc_message_print(response, 0);
 
@@ -31,6 +34,32 @@ void onServiceResponse(void* res) {
     printf(" Response TestData = [%d, %lf, %s]\n", resData.id, resData.value,
            resData.name);
   }
+
+  return 0;
+}
+
+int onConnect(void* owner, void*) {
+  if (!owner) return -1;
+
+  upa_grpc_client_handler client = (upa_grpc_client_handler)owner;
+
+  printf("onConnect... name[%s], msg_type[%s]\n",
+         upa_grpc_client_get_name(client),
+         upa_grpc_msg_type_str(upa_grpc_client_get_msg_type(client)));
+
+  return 0;
+}
+
+int onClose(void* owner, void*) {
+  if (!owner) return -1;
+
+  upa_grpc_client_handler client = (upa_grpc_client_handler)owner;
+
+  printf("onClose... name[%s], msg_type[%s]\n",
+         upa_grpc_client_get_name(client),
+         upa_grpc_msg_type_str(upa_grpc_client_get_msg_type(client)));
+
+  return 0;
 }
 
 int _get_opt(int argc, char** argv) {
@@ -98,17 +127,20 @@ void sendTestMessage(upa_grpc_client_handler handler) {
   upa_grpc_message_print(request, 1);
 
   int rv = upa_grpc_client_send(handler, request);
-  if( rv < 0 ) upa_grpc_message_destroy(request);
+  if (rv < 0) upa_grpc_message_destroy(request);
 }
 
 int main(int argc, char** argv) {
   int rv;
 
   if ((rv = _get_opt(argc, argv)) < 0) return rv;
-  upa_grpc_client_handler handler = upa_grpc_client_create(
-      _g_ip, _g_port, UPA_GRPC_MSG_TYPE_DBIF, onServiceResponse);
+  upa_grpc_client_handler handler =
+      upa_grpc_client_create(_g_ip, _g_port, "UPA_GRPC:CLIENT",
+                             UPA_GRPC_MSG_TYPE_DBIF, onServiceResponse);
 
   upa_grpc_client_set_reconnect_backoff(handler, 5000, 5000);
+  upa_grpc_client_set_on_connect(handler, onConnect);
+  upa_grpc_client_set_on_close(handler, onClose);
 
   rv = upa_grpc_client_start(handler);
   if (rv < 0) return rv;

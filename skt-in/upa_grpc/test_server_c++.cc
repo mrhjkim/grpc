@@ -25,20 +25,22 @@ struct TestData {
 };
 #pragma pack(pop)
 
-int onServiceRequest(void* ctx, const void* req, void* ract) {
-  if (!ctx || !req || !ract) return -1;
+int onServiceRequest(const void* req, void* owner, void* ract) {
+  if (!req || !owner || !ract) return -1;
 
   if (_g_wait_time > 0 && _g_wait_time <= 3600) {
     std::cout << "Sleep " << _g_wait_time << "seconds for test." << std::endl;
     sleep(_g_wait_time);
   }
 
-  grpc::CallbackServerContext* context =
-      static_cast<grpc::CallbackServerContext*>(ctx);
+  const Message* request = static_cast<const Message*>(req);
+  UpaGrpcServer* server = static_cast<UpaGrpcServer*>(owner);
   grpc::ServerBidiReactor<Message, Message>* reactor =
       static_cast<grpc::ServerBidiReactor<Message, Message>*>(ract);
-  const Message* request = static_cast<const Message*>(req);
-  Message response;
+
+  std::cout << "onServiceRequest... name[" << server->GetName()
+            << "], msg_type[" << MsgTypeStr(server->GetMsgType()) << "], peer["
+            << server->GetReactorName(reactor) << "]" << std::endl;
 
   PrintMessage(request, false);
 
@@ -52,6 +54,7 @@ int onServiceRequest(void* ctx, const void* req, void* ract) {
               << std::endl;
   }
 
+  Message response;
   SetMsgType(&response, GetMsgType(request));
   SetSrcId(&response, GetSrcId(request));
   SetDstId(&response, "CNCF-OCS-PROXY-1");
@@ -67,9 +70,37 @@ int onServiceRequest(void* ctx, const void* req, void* ract) {
 
   PrintMessage(&response, true);
 
-  UpaGrpcServerSend(reactor, &response);
+  server->Send(&response, reactor);
   sleep(3);
-  UpaGrpcServerSend(reactor, &response);
+  server->Send(&response, reactor);
+
+  return 0;
+}
+
+int onAccept(void* owner, void* ract) {
+  if (!owner || !ract) return -1;
+
+  UpaGrpcServer* server = static_cast<UpaGrpcServer*>(owner);
+  grpc::ServerBidiReactor<Message, Message>* reactor =
+      static_cast<grpc::ServerBidiReactor<Message, Message>*>(ract);
+
+  std::cout << "onAccept... name[" << server->GetName()
+            << "], msg_type[" << MsgTypeStr(server->GetMsgType()) << "], peer["
+            << server->GetReactorName(reactor) << "]" << std::endl;
+
+  return 0;
+}
+
+int onClose(void* owner, void* ract) {
+  if (!owner || !ract) return -1;
+
+  UpaGrpcServer* server = static_cast<UpaGrpcServer*>(owner);
+  grpc::ServerBidiReactor<Message, Message>* reactor =
+      static_cast<grpc::ServerBidiReactor<Message, Message>*>(ract);
+
+  std::cout << "onClose... name[" << server->GetName()
+            << "], msg_type[" << MsgTypeStr(server->GetMsgType()) << "], peer["
+            << server->GetReactorName(reactor) << "]" << std::endl;
 
   return 0;
 }
@@ -78,7 +109,9 @@ int main(int argc, char** argv) {
   absl::ParseCommandLine(argc, argv);
   _g_wait_time = absl::GetFlag(FLAGS_wait_time);
   UpaGrpcServer server(absl::GetFlag(FLAGS_ip), absl::GetFlag(FLAGS_port),
-                       MSG_TYPE_DBIF, onServiceRequest);
+                       "UPA_GRPC:SERVER", MSG_TYPE_DBIF, onServiceRequest);
+  server.SetOnAccept(onAccept);
+  server.SetOnClose(onClose);
 
 #if 0
   server.Run();

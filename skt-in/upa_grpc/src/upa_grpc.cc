@@ -102,16 +102,20 @@ void PrintMessage(const Message* msg, bool is_send) {
 class UpaGrpcClientReactor : public UpaGrpcClientReactorClass {
  public:
   explicit UpaGrpcClientReactor(UpaGrpcService::Stub* stub,
-                                UpaGrpcClientCallback callback, UpaGrpcClient* owner)
-      : stub_(stub), callback_(callback), owner_(owner) {
+                                UpaGrpcClient* owner)
+      : stub_(stub), owner_(owner) {
     // Start the RPC; the library will call OnDone/OnReadDone/OnWriteDone
     stub_->async()->SendMessage(&ctx_, this);
 
     StartRead(&read_msg_);  // Start reading
     StartCall();
+
+    // 연결 상태 변경 시 on connect/close callback 호출된다.
+    if(owner_) owner_->GetState(); 
   }
+
   ~UpaGrpcClientReactor() {
-    if( owner_) owner_->StopReactor(false);
+    if (owner_) owner_->StopReactor(false);
   }
 
   void OnReadDone(bool ok) override {
@@ -119,25 +123,29 @@ class UpaGrpcClientReactor : public UpaGrpcClientReactorClass {
       return;
     }
 
-    callback_(&read_msg_);
+    owner_->GetOnRead()(&read_msg_, owner_, nullptr);
 
     StartRead(&read_msg_);  // Continue reading
   }
 
   void OnWriteDone(bool /*ok*/) override {
     // write failed or stream closed by server
+
+    // 연결 상태 변경 시 on connect/close callback 호출된다.
+    if(owner_) owner_->GetState(); 
   }
 
   void OnDone(const grpc::Status& status) override {
-    std::cout << "Closed channel. peer[" << ctx_.peer() << "]"
-              << std::endl;
     // RPC failed or finished cleanly
+
+    // 연결 상태 변경 시 on connect/close callback 호출된다.
+    if(owner_) owner_->GetState(); 
+
     delete this;
   }
 
  private:
   UpaGrpcService::Stub* stub_;
-  UpaGrpcClientCallback callback_;
   UpaGrpcClient* owner_;
   grpc::ClientContext ctx_;
   Message read_msg_;
@@ -174,6 +182,7 @@ int UpaGrpcClient::Start() {
 }
 
 void UpaGrpcClient::Stop() {
+  GetState();
   StopReactor(true);
   if (channel_ != nullptr) {
     channel_.reset();
@@ -195,7 +204,7 @@ int UpaGrpcClient::StartReactor() {
     return -1;
   }
 
-  reactor_ = new UpaGrpcClientReactor(stub_.get(), callback_, this);
+  reactor_ = new UpaGrpcClientReactor(stub_.get(), this);
 
   return 0;
 }
@@ -209,21 +218,88 @@ void UpaGrpcClient::StopReactor(bool sendDoneFlag) {
   }
 }
 
+/// @brief 채널 연결 상태 조회
+/// on connect / close callback 등록된 경우 연결 상태 변경 확인 시 호출한다.
+/// @return channel state (GRPC_CHANNEL_IDLE/CONNECTING/READY/FAILURE/SHUTWODN)
 int UpaGrpcClient::GetState() {
-  return static_cast<int>(channel_->GetState(false));
+  int state = GRPC_CHANNEL_IDLE;
+  if (channel_) state = static_cast<int>(channel_->GetState(false));
+
+  if (last_channel_state_ != GRPC_CHANNEL_READY &&
+      state == GRPC_CHANNEL_READY) {
+    if (callback_connect_) callback_connect_(this, nullptr);
+  } else if (last_channel_state_ == GRPC_CHANNEL_READY &&
+             state != GRPC_CHANNEL_READY) {
+    if (callback_close_) callback_close_(this, nullptr);
+  }
+  last_channel_state_ = state;
+
+  return state;
 }
 
+/// @brief server에 연결 상태인지 확인하고 연결될 때까지 대기한다.
+/// @param wait_sec 대기시간 (단위:초)
+/// @return true: ready 상태, false: 그 외 상태
 bool UpaGrpcClient::WaitForConnected(int wait_sec) {
   std::chrono::time_point deadline =
       std::chrono::system_clock::now() + std::chrono::seconds(wait_sec);
   return channel_->WaitForConnected(deadline);
 }
 
+/// @brief client 객체 생성 시 등록한 server에 접속할 주소 정보 조회
+/// @return target address(ip:port)
+const char* UpaGrpcClient::GetTarget() { return target_.c_str(); }
+
+/// @brief client 객체 생성 시 등록한 name 조회
+/// @return name
+const char* UpaGrpcClient::GetName() { return name_.c_str(); }
+
+/// @brief client 객체 생성 시 등록한 message type 조회
+/// @return MsgType
+MsgType UpaGrpcClient::GetMsgType() { return msg_type_; }
+
+/// @brief client 객체 생성 시 등록한 on read callback function 조회
+/// @return UpaGrpcOnReadCallback
+UpaGrpcOnReadCallback UpaGrpcClient::GetOnRead() { return callback_read_; }
+
+/// @brief client 객체에 등록한 on connect callback function 조회
+/// @return UpaGrpcOnConnectCallback
+UpaGrpcOnConnectCallback UpaGrpcClient::GetOnConnect() {
+  return callback_connect_;
+}
+/// @brief client 객체에 on connect callback function 등록한다.
+/// @param onConnect on connect callback function
+void UpaGrpcClient::SetOnConnect(UpaGrpcOnConnectCallback onConnect) {
+  callback_connect_ = onConnect;
+}
+
+/// @brief client 객체에 등록한 on close callback function 조회
+/// @return UpaGrpcOnConnectCallback
+UpaGrpcOnCloseCallback UpaGrpcClient::GetOnClose() { return callback_close_; }
+/// @brief client 객체에 on close callback function 등록한다.
+/// @param onClose on close callback function
+void UpaGrpcClient::SetOnClose(UpaGrpcOnCloseCallback onClose) {
+  callback_close_ = onClose;
+}
+
+/// @brief 채널 재접속 시간 옵션을 등록한다.
+/// @param min 재접속 최소 시간 (단위:1/1000초)
+/// @param max 재접속 최장 시간 (단위:1/1000초)
 void UpaGrpcClient::SetReconnectBackoff(int min, int max) {
   if (min >= 0) min_backoff_ = min;
   if (max >= 0) max_backoff_ = max;
 }
 
+/// @brief client 객체에 등록한 user data 조회
+/// @return user data
+void* UpaGrpcClient::GetUserData() { return userdata_; }
+/// @brief client 객체에 user data를 등록한다.
+/// @param userdata user data
+void UpaGrpcClient::SetUserData(void* userdata) { userdata_ = userdata; }
+
+/// @brief server에 메시지를 전송한다.
+/// @param msg 전송할 메시지
+/// @return result code (0:success, -1:접속 실패 등)
 int UpaGrpcClient::Send(Message* msg) {
   if (reactor_ == nullptr) StartReactor();
   if (reactor_ == nullptr) return -1;
@@ -238,29 +314,41 @@ int UpaGrpcClient::Send(Message* msg) {
 // Implementation of the UpaGrpcServer class.
 class UpaGrpcServiceImpl final : public UpaGrpcService::CallbackService {
  public:
-  UpaGrpcServiceImpl(MsgType msg_type, UpaGrpcServerCallback callback)
-      : msg_type_(msg_type), callback_(callback) {}
+  UpaGrpcServiceImpl(UpaGrpcServer* owner) : owner_(owner) {}
 
-  // TODO : accept / close callback을 적절히 잘 넣으면 될 듯
-  // -- SetAcctptCallback, SetCloseCallback
+  UpaGrpcServer* GetUpaGrpcServer() { return owner_; }
+  MsgType GetMsgType() { return owner_->GetMsgType(); }
+  UpaGrpcOnReadCallback GetOnRead() { return owner_->GetOnRead(); }
+  UpaGrpcOnAcceptCallback GetOnAccept() { return owner_->GetOnAccept(); }
+  UpaGrpcOnCloseCallback GetOnClose() { return owner_->GetOnClose(); }
+  const char* GetReactorName(UpaGrpcServerReactorClass* reactor) {
+    return owner_->GetReactorName(reactor);
+  }
+  int DeleteReactor(std::string name) { return owner_->DeleteReactor(name); }
 
   // This function is called by gRPC when a new RPC arrives
   UpaGrpcServerReactorClass* SendMessage(
       grpc::CallbackServerContext* context) override {
 
-    std::cout << "Accepted channel. peer[" << context->peer() << "]"
-              << std::endl;
-
     class Reactor : public UpaGrpcServerReactorClass {
      public:
-      Reactor(grpc::CallbackServerContext* context, MsgType msg_type,
-              UpaGrpcServerCallback callback)
-          : context_(context), msg_type_(msg_type), callback_(callback) {
+      Reactor(grpc::CallbackServerContext* context, UpaGrpcServiceImpl *owner)
+          : context_(context), owner_(owner) {
         peer_ = context->peer();
         // Start readind the first message
         StartRead(&read_msg_);
       }
-      ~Reactor() {}
+      ~Reactor() {
+        UpaGrpcOnCloseCallback onClose = owner_->GetOnClose();
+        if (owner_->GetReactorName(this) != "") {
+          if (onClose) {
+            onClose(owner_->GetUpaGrpcServer(), this);
+          } else {
+            std::cout << "Closed channel. peer[" << peer_ << "]" << std::endl;
+          }
+          owner_->DeleteReactor(peer_);
+        }
+      }
 
       void OnReadDone(bool ok) override {
         if (!ok) {  // Client closed the write side
@@ -269,14 +357,14 @@ class UpaGrpcServiceImpl final : public UpaGrpcService::CallbackService {
         }
 
         // Process incoming message
-        if (read_msg_.msg_type() != msg_type_) {
+        if (read_msg_.msg_type() != owner_->GetMsgType()) {
           std::cout << "Invalid type(" << read_msg_.msg_type()
                     << ") message received. drop the message." << std::endl;
           Finish(grpc::Status::CANCELLED);
           return;
         }
 
-        int rv = callback_(context_, &read_msg_, this);
+        int rv = owner_->GetOnRead()(&read_msg_, owner_->GetUpaGrpcServer(), this);
         if (!rv) {  // Continue reading more messages
           StartRead(&read_msg_);
         } else {
@@ -289,25 +377,38 @@ class UpaGrpcServiceImpl final : public UpaGrpcService::CallbackService {
       }
 
       void OnDone() override {
-        std::cout << "Closed channel. peer[" << peer_ << "]" << std::endl;
         // RPC finished
         delete this;
       }
 
      private:
       grpc::CallbackServerContext* context_;
-      MsgType msg_type_;
-      UpaGrpcServerCallback callback_;
+      UpaGrpcServiceImpl *owner_;
       std::string peer_;
       Message read_msg_;
     };
+    UpaGrpcServerReactorClass* reactor = new Reactor(context, this);
 
-    return new Reactor(context, msg_type_, callback_);
+    int rv = owner_->SetReactor(reactor, context->peer());
+    if (rv < 0) {
+      std::cout << "Alreay exists reactor or full reactor array." << std::endl;
+      delete reactor;
+      return nullptr;
+    }
+
+    UpaGrpcOnAcceptCallback onAccept = owner_->GetOnAccept();
+    if (onAccept) {
+      onAccept(owner_, reactor);
+    } else {
+      std::cout << "Accepted channel. peer[" << context->peer() << "]"
+                << std::endl;
+    }
+
+    return reactor;
   }
 
  private:
-  MsgType msg_type_;
-  UpaGrpcServerCallback callback_;
+  UpaGrpcServer *owner_;
 };
 
 int UpaGrpcServer::Run() {
@@ -319,7 +420,7 @@ int UpaGrpcServer::Run() {
   grpc::EnableDefaultHealthCheckService(true);
   grpc::reflection::InitProtoReflectionServerBuilderPlugin();
 
-  UpaGrpcServiceImpl serviceImpl(msg_type_, callback_);
+  UpaGrpcServiceImpl serviceImpl(this);
 
   grpc::ServerBuilder builder;
   builder.AddListeningPort(addr_, grpc::InsecureServerCredentials());
@@ -345,6 +446,13 @@ void UpaGrpcServer::Start() {
 
 void UpaGrpcServer::Stop() {
   if (server_ != nullptr) {
+    if (callback_close_) {
+      for (int i = 0; i < MAX_UPA_GRPC_SERVER_REACTOR; i++) {
+        if(reactor_array_[i] == nullptr) continue;
+        callback_close_(this, reactor_array_[i]);
+        DeleteReactor(i);
+      }
+    }
     server_->Shutdown();
     server_->Wait();
     server_.reset();
@@ -354,8 +462,151 @@ void UpaGrpcServer::Stop() {
   }
 }
 
-int UpaGrpcServerSend(UpaGrpcServerReactorClass* reactor, Message* msg) {
-  if (reactor == nullptr || msg == nullptr) return -1;
+/// @brief server 객체 생성 시 등록한 listen 주소 정보 조회
+/// @return listen address(ip:port)
+const char* UpaGrpcServer::GetAddr() { return addr_.c_str(); }
+
+/// @brief server 객체 생성 시 등록한 name 조회
+/// @return name
+const char* UpaGrpcServer::GetName() { return name_.c_str(); }
+
+/// @brief server 객체 생성 시 등록한 message type 조회
+/// @return MsgType
+MsgType UpaGrpcServer::GetMsgType() { return msg_type_; }
+
+/// @brief server 객체 생성 시 등록한 on read callback function 조회
+/// @return UpaGrpcOnReadCallback
+UpaGrpcOnReadCallback UpaGrpcServer::GetOnRead() { return callback_read_; }
+
+/// @brief server 객체에 등록한 on accept callback function 조회
+/// @return UpaGrpcOnAcceptCallback
+UpaGrpcOnAcceptCallback UpaGrpcServer::GetOnAccept() {
+  return callback_accept_;
+}
+/// @brief server 객체에 on accept callback function 등록한다.
+/// @param onAccept on accept callback function
+void UpaGrpcServer::SetOnAccept(UpaGrpcOnAcceptCallback onAccept) {
+  callback_accept_ = onAccept;
+};
+
+/// @brief server 객체에 등록한 on close callback function 조회
+/// @return UpaGrpcOnCloseCallback
+UpaGrpcOnCloseCallback UpaGrpcServer::GetOnClose() { return callback_close_; }
+/// @brief server 객체에 on close callback function 등록한다.
+/// @param onClose on close callback function
+void UpaGrpcServer::SetOnClose(UpaGrpcOnCloseCallback onClose) {
+  callback_close_ = onClose;
+}
+
+/// @brief server 객체에 등록한 user data 조회
+/// @return user data
+void* UpaGrpcServer::GetUserData() { return userdata_; }
+/// @brief server 객체에 user data를 등록한다.
+/// @param userdata user data
+void UpaGrpcServer::SetUserData(void* userdata) { userdata_ = userdata; }
+
+void UpaGrpcServer::initReactorArray() {
+  for (int i = 0; i < MAX_UPA_GRPC_SERVER_REACTOR; i++) {
+    reactor_array_[i] = nullptr;
+    reactor_name_array_[i] = "";
+  }
+}
+UpaGrpcServerReactorClass* UpaGrpcServer::GetReactor(std::string name) {
+  for (int i = 0; i < MAX_UPA_GRPC_SERVER_REACTOR; i++) {
+    if (reactor_array_[i] == nullptr) continue;
+    if (reactor_name_array_[i] == "") continue;
+    if (reactor_name_array_[i] == name) return reactor_array_[i];
+  }
+  return nullptr;
+}
+UpaGrpcServerReactorClass* UpaGrpcServer::GetReactor(int idx) {
+  if (idx < 0 || idx >= MAX_UPA_GRPC_SERVER_REACTOR) return nullptr;
+  return reactor_array_[idx];
+}
+int UpaGrpcServer::SetReactor(UpaGrpcServerReactorClass* reactor, std::string name) {
+  if (GetReactor(name) != nullptr) return -1;  // Already exists
+  for (int i = 0; i < MAX_UPA_GRPC_SERVER_REACTOR; i++) {
+    if (reactor_array_[i] == nullptr) {
+      reactor_array_[i] = reactor;
+      reactor_name_array_[i] = name;
+      return i;
+    }
+  }
+  return -1;  // Reactor array fulled
+}
+int UpaGrpcServer::DeleteReactor(std::string name) {
+  for (int i = 0; i < MAX_UPA_GRPC_SERVER_REACTOR; i++) {
+    if (reactor_array_[i] == nullptr) continue;
+    if (reactor_name_array_[i] == "") continue;
+    if (reactor_name_array_[i] == name) {
+      reactor_array_[i] = nullptr;
+      reactor_name_array_[i] = "";
+      return 0;
+    }
+  }
+  return -1; // not found
+}
+int UpaGrpcServer::DeleteReactor(int idx) {
+  if (idx < 0 || idx >= MAX_UPA_GRPC_SERVER_REACTOR) return -1;
+  reactor_array_[idx] = nullptr;
+  reactor_name_array_[idx] = "";
+  return 0;
+}
+
+const char* UpaGrpcServer::GetReactorName(UpaGrpcServerReactorClass* reactor) {
+  for (int i = 0; i < MAX_UPA_GRPC_SERVER_REACTOR; i++) {
+    if (reactor_array_[i] == nullptr) continue;
+    if (reactor_array_[i] == reactor) return reactor_name_array_[i].c_str();
+  }
+  return "";  // not found
+}
+
+const char* UpaGrpcServer::GetReactorName(int idx) {
+  if (idx < 0 || idx >= MAX_UPA_GRPC_SERVER_REACTOR) return "";
+  return reactor_name_array_[idx].c_str();
+}
+
+/// @brief reactor를 이용하여 client peer에 메시지를 전송한다.
+/// @param msg 전송할 메시지
+/// @param reactor client peer 연결 시 생성된 reactor 객체
+/// @return result code
+int UpaGrpcServer::Send(Message* msg, UpaGrpcServerReactorClass* reactor) {
+  if (msg == nullptr || reactor == nullptr) return -1;  // invalid parameters
+
+  const char* name = GetReactorName(reactor);
+  if (name == "") return -1;  // not found reactor
+
   reactor->StartWrite(msg);
+
+  return 0;
+}
+
+/// @brief 등록된 reactor를 찾고 이를 이용하여 client peer에 메시지를 전송한다.
+/// @param msg 전송할 메시지
+/// @param reactor_name server 객체에 등록된 reactor name
+/// @return result code
+int UpaGrpcServer::Send(Message* msg, std::string reactor_name) {
+  if (msg == nullptr || reactor_name == "") return -1;  // invalid parameters
+
+  UpaGrpcServerReactorClass* reactor = GetReactor(reactor_name);
+  if (reactor == nullptr) return -1;  // not found reactor
+
+  reactor->StartWrite(msg);
+
+  return 0;
+}
+
+/// @brief 등록된 reactor를 찾고 이를 이용하여 client peer에 메시지를 전송한다.
+/// @param msg 전송할 메시지
+/// @param reactor_idx server 객체제 등록된 reactor index
+/// @return result code
+int UpaGrpcServer::Send(Message* msg, int reactor_idx) {
+  if (msg == nullptr || reactor_idx < 0) return -1;  // invalid parameters
+
+  UpaGrpcServerReactorClass* reactor = GetReactor(reactor_idx);
+  if (reactor == nullptr) return -1;  // not found reactor
+
+  reactor->StartWrite(msg);
+
   return 0;
 }

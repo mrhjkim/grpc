@@ -17,12 +17,48 @@
 #include "upa_grpc.grpc.pb.h"
 #endif
 
-using UpaGrpcClientCallback = void (*)(void*); // read_msg
-using UpaGrpcServerCallback = int (*)(void*, const void*, void*); // context, read_msg, reactor
-using UpaGrpcClientReactorClass = grpc::ClientBidiReactor<upa_grpc::Message, upa_grpc::Message>;
-using UpaGrpcServerReactorClass = grpc::ServerBidiReactor<upa_grpc::Message, upa_grpc::Message>;
+/**
+ * defines
+ */
 
-// API of Message struct
+#define MAX_UPA_GRPC_SERVER_REACTOR 128
+
+/// @brief 메시지 수신 시 호출할 callback function type
+/// @param msg read message (upa_grpc::Message*)
+/// @param owner 서비스 객체 (server:UpaGrpcServer*, client:UpaGrpcClient*)
+/// @param ract reactor 객체 (server:UpaGrpcServerReactorClass*, client:nullptr)
+/// @return result code
+using UpaGrpcOnReadCallback = int (*)(const void* msg, void* owner, void* ract);
+
+/// @brief server service 객체에서 client 연결 시 호출할 callback function type
+/// @param owner server 객체 (UpaGrpcServer*)
+/// @param ract reactor 객체 (UpaGrpcServerReactorClass*)
+/// @return result code
+using UpaGrpcOnAcceptCallback = int (*)(void* owner, void* react);
+
+/// @brief client service 객체에서 server 연결 시 호출할 callback function type
+/// @param owner client 객체 (UpaGrpcClient*)
+/// @return result code
+using UpaGrpcOnConnectCallback = int (*)(void* owner, void*);
+
+/// @brief 서비스 객체에서 peer 연결 해제 시 호출할 callback function type
+/// @param owner 서비스 객체 (server:UpaGrpcServer*, client:UpaGrpcClient*)
+/// @param ract reactor 객체 (server:UpaGrpcServerReactorClass*, client:nullptr)
+/// @return result code
+using UpaGrpcOnCloseCallback = int (*)(void* owner, void* ract);
+
+/// @brief client service 객체에서 사용되는 reactor (bidirectional stream 방식)
+using UpaGrpcClientReactorClass =
+    grpc::ClientBidiReactor<upa_grpc::Message, upa_grpc::Message>;
+
+/// @brief server service 객체에서 사용되는 reactor (bidirectional stream 방식)
+using UpaGrpcServerReactorClass =
+    grpc::ServerBidiReactor<upa_grpc::Message, upa_grpc::Message>;
+
+/**
+ * API of Message struct
+ */
+
 const char* MsgTypeStr(int type);
 int GetMsgType(const upa_grpc::Message* msg);
 void SetMsgType(upa_grpc::Message* msg, int val);
@@ -39,67 +75,141 @@ void SetData(upa_grpc::Message* msg, const char* val, size_t size);
 std::string SprintMessage(const upa_grpc::Message* msg, bool is_send);
 void PrintMessage(const upa_grpc::Message* msg, bool is_send);
 
-// UpaGrpcClient
+/**
+ * UpaGrpcClient
+ */
+
 class UpaGrpcClient {
  public:
-  UpaGrpcClient(std::string ip, uint16_t port, upa_grpc::MsgType msgType,
-                UpaGrpcClientCallback callback)
+  UpaGrpcClient(std::string ip, uint16_t port, std::string name,
+                upa_grpc::MsgType msgType, UpaGrpcOnReadCallback onRead)
       : target_(ip + ":" + std::to_string(port)),
+        name_(name),
         msg_type_(msgType),
-        callback_(callback) {}
-  UpaGrpcClient(std::string target, upa_grpc::MsgType msgType,
-                UpaGrpcClientCallback callback)
-      : target_(target), msg_type_(msgType), callback_(callback) {}
+        callback_read_(onRead) {}
+  UpaGrpcClient(std::string target, std::string name, upa_grpc::MsgType msgType,
+                UpaGrpcOnReadCallback onRead)
+      : target_(target),
+        name_(name),
+        msg_type_(msgType),
+        callback_read_(onRead) {}
   ~UpaGrpcClient() { Start(); }
 
-  int Start(); // start client channel and reactor
-  void Stop(); // stop client channel and reactor
-  int StartReactor(); // start client reactor
-  void StopReactor(bool sendDoneFlag); // stop client reactor
-  int GetState(); // check channel status
+  // start client channel and reactor
+  int Start();
+  // stop client channel and reactor
+  void Stop();
+  // start client reactor
+  int StartReactor();
+  // stop client reactor
+  void StopReactor(bool sendDoneFlag);  
+  // check channel status
+  int GetState();                       
+  // wait for the channel connected
   bool WaitForConnected(int wait_sec);
+
+  const char* GetTarget();
+  const char* GetName();
+  upa_grpc::MsgType GetMsgType();
+  UpaGrpcOnReadCallback GetOnRead();
+
+  UpaGrpcOnConnectCallback GetOnConnect();
+  void SetOnConnect(UpaGrpcOnConnectCallback onConnect);
+
+  UpaGrpcOnCloseCallback GetOnClose();
+  void SetOnClose(UpaGrpcOnCloseCallback onClose);
+
   void SetReconnectBackoff(int min, int max);
+
+  void* GetUserData();
+  void SetUserData(void* userdata);
 
   int Send(upa_grpc::Message* msg);
 
  private:
   std::string target_;
+  std::string name_;
   upa_grpc::MsgType msg_type_;
-  UpaGrpcClientCallback callback_;
-  int min_backoff_;  // min reconnect backoff time (msec)
-  int max_backoff_;  // max reconnect backoff time (msec)
+  UpaGrpcOnReadCallback callback_read_;
+  UpaGrpcOnConnectCallback callback_connect_ = nullptr;
+  UpaGrpcOnCloseCallback callback_close_ = nullptr;
+  int min_backoff_ = 0;  // min reconnect backoff time (msec)
+  int max_backoff_ = 0;  // max reconnect backoff time (msec)
+  void *userdata_ = nullptr;
   std::shared_ptr<grpc::Channel> channel_ = nullptr;
   std::unique_ptr<upa_grpc::UpaGrpcService::Stub> stub_ = nullptr;
   UpaGrpcClientReactorClass* reactor_ = nullptr;
+  int last_channel_state_ = GRPC_CHANNEL_IDLE;
 };
 
-// UpaGrpcServer
+/**
+ * UpaGrpcServer
+ */
+
 class UpaGrpcServer {
  public:
-  UpaGrpcServer(std::string ip, uint16_t port, upa_grpc::MsgType msgType,
-                UpaGrpcServerCallback callback)
+  UpaGrpcServer(std::string ip, uint16_t port, std::string name,
+                upa_grpc::MsgType msgType, UpaGrpcOnReadCallback callback)
       : addr_(ip + ":" + std::to_string(port)),
+        name_(name),
         msg_type_(msgType),
-        callback_(callback) {}
-  UpaGrpcServer(std::string addr, upa_grpc::MsgType msgType,
-                UpaGrpcServerCallback callback)
-      : addr_(addr), msg_type_(msgType), callback_(callback) {}
+        callback_read_(callback) {
+    initReactorArray();
+  }
+  UpaGrpcServer(std::string addr, std::string name, upa_grpc::MsgType msgType,
+                UpaGrpcOnReadCallback callback)
+      : addr_(addr), name_(name), msg_type_(msgType), callback_read_(callback) {
+    initReactorArray();
+  }
   ~UpaGrpcServer() { Stop(); }
 
+  // server service 객체를 실행합니다. Stop 매소드가 실행되어 객체가 정지해야 리턴합니다.
   int Run();
-  void Start();  // thread를 생성하고 server run 실행 시킨다.
-  void Stop();   // server를 shutdown한다. start에서 생성된 thread는 종료된다.
+  // thread를 생성하고 server Run 실행합니다.
+  void Start(); 
+  // server를 shutdown 합니다. Start에서 생성된 thread는 종료됩니다.
+  void Stop(); 
+
+  const char* GetAddr();
+  const char* GetName();
+  upa_grpc::MsgType GetMsgType();
+  UpaGrpcOnReadCallback GetOnRead();
+
+  UpaGrpcOnAcceptCallback GetOnAccept();
+  void SetOnAccept(UpaGrpcOnAcceptCallback onAccept);
+
+  UpaGrpcOnCloseCallback GetOnClose();
+  void SetOnClose(UpaGrpcOnCloseCallback onClose);
+
+  void* GetUserData();
+  void SetUserData(void* userdata);
+
+  UpaGrpcServerReactorClass* GetReactor(std::string name);
+  UpaGrpcServerReactorClass* GetReactor(int idx);
+  const char* GetReactorName(UpaGrpcServerReactorClass* reactor);
+  const char* GetReactorName(int idx);
+  int SetReactor(UpaGrpcServerReactorClass* reactor, std::string name);
+  int DeleteReactor(std::string name);
+  int DeleteReactor(int idx);
+
+  int Send(upa_grpc::Message* msg, UpaGrpcServerReactorClass* reactor);
+  int Send(upa_grpc::Message* msg, std::string reactor_name);
+  int Send(upa_grpc::Message* msg, int reactor_idx);
 
  private:
   std::string addr_;
+  std::string name_;
   upa_grpc::MsgType msg_type_;
-  UpaGrpcServerCallback callback_;
+  UpaGrpcOnReadCallback callback_read_;
+  UpaGrpcOnAcceptCallback callback_accept_ = nullptr;
+  UpaGrpcOnCloseCallback callback_close_ = nullptr;
+  void* userdata_ = nullptr;
   std::unique_ptr<grpc::Server> server_ = nullptr;
-};
 
-int UpaGrpcServerSend(UpaGrpcServerReactorClass* reactor,
-                      upa_grpc::Message* msg);
-// TODO : UpaGrpcServer class에서 reactor를 client channel과 같이 관리하고 peer
-// key를 통해 조회할 수 있도록 구조개선해야겠다.
+  UpaGrpcServerReactorClass* reactor_array_[MAX_UPA_GRPC_SERVER_REACTOR];
+  std::string reactor_name_array_[MAX_UPA_GRPC_SERVER_REACTOR];
+  void initReactorArray();
+ // TODO: lock 추가, 구조개선(reactor array 관리 class??)
+};
 
 #endif  // __UPA_GRPC_H__

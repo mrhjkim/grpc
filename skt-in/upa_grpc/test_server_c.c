@@ -15,10 +15,10 @@ char _g_ip[32] = { "0.0.0.0"};
 unsigned short _g_port = 50051;
 int _g_wait_time = 0;
 
-int onServiceRequest(void* ctx, const void* req, void* ract) {
-  if (!ctx || !req || !ract) {
-    printf("%s : Invalid parameters. ctx=%p, req=%p, ract=%p\n", __func__, ctx,
-           req, ract);
+int onServiceRequest(const void* req, void* owner, void* ract) {
+  if (!req || !owner || !ract) {
+    printf("%s : Invalid parameters. req=%p, owner=%p, ract=%p\n", __func__,
+           req, owner, ract);
     return -1;
   }
 
@@ -27,10 +27,15 @@ int onServiceRequest(void* ctx, const void* req, void* ract) {
     sleep(_g_wait_time);
   }
 
-  upa_grpc_server_context_t* context = (upa_grpc_server_context_t*)ctx;
   const upa_grpc_message_t* request = (const upa_grpc_message_t*)req;
+  upa_grpc_server_handler server = (upa_grpc_server_handler)owner;
   upa_grpc_server_reactor_t* reactor = (upa_grpc_server_reactor_t*)ract;
   upa_grpc_message_t* response = upa_grpc_message_alloc();
+
+  printf("onServiceRequest... name[%s], msg_type[%s], peer[%s]\n",
+         upa_grpc_server_get_name(server),
+         upa_grpc_msg_type_str(upa_grpc_server_get_msg_type(server)),
+         upa_grpc_server_get_reactor_name(server, reactor));
 
   upa_grpc_message_print(request, 0);
 
@@ -60,9 +65,37 @@ int onServiceRequest(void* ctx, const void* req, void* ract) {
 
   upa_grpc_message_print(response, 1);
 
-  if( upa_grpc_server_send(reactor, response) < 0 ) {
+  if( upa_grpc_server_send(server, response, reactor) < 0 ) {
     upa_grpc_message_destroy(response);
   }
+  return 0;
+}
+
+int onAccept(void* owner, void* ract) {
+  if (!owner || !ract) return -1;
+
+  upa_grpc_server_handler server = (upa_grpc_server_handler)owner;
+  upa_grpc_server_reactor_t* reactor = (upa_grpc_server_reactor_t*)ract;
+
+  printf("onAccept... name[%s], msg_type[%s], peer[%s]\n",
+         upa_grpc_server_get_name(server),
+         upa_grpc_msg_type_str(upa_grpc_server_get_msg_type(server)),
+         upa_grpc_server_get_reactor_name(server, reactor));
+
+  return 0;
+}
+
+int onClose(void* owner, void* ract) {
+  if (!owner || !ract) return -1;
+
+  upa_grpc_server_handler server = (upa_grpc_server_handler)owner;
+  upa_grpc_server_reactor_t* reactor = (upa_grpc_server_reactor_t*)ract;
+
+  printf("onClose... name[%s], msg_type[%s], peer[%s]\n",
+         upa_grpc_server_get_name(server),
+         upa_grpc_msg_type_str(upa_grpc_server_get_msg_type(server)),
+         upa_grpc_server_get_reactor_name(server, reactor));
+
   return 0;
 }
 
@@ -126,9 +159,15 @@ final:
 
 int main(int argc, char** argv) {
   int rv;
+
   if ((rv = _get_opt(argc, argv)) < 0) return rv;
-  upa_grpc_server_handler handler = upa_grpc_server_create(
-      _g_ip, _g_port, UPA_GRPC_MSG_TYPE_DBIF, onServiceRequest);
+  upa_grpc_server_handler handler =
+      upa_grpc_server_create(_g_ip, _g_port, "UPA_GRPC:SERVER",
+                             UPA_GRPC_MSG_TYPE_DBIF, onServiceRequest);
+
+  upa_grpc_server_set_on_accept(handler, onAccept);
+  upa_grpc_server_set_on_close(handler, onClose);
+
 #if 0
   upa_grpc_server_run(handler);
 #else

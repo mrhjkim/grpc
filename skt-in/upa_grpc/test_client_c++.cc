@@ -22,13 +22,15 @@ struct TestData {
 };
 #pragma pack(pop)
 
-void onServiceResponse(void* res) {
-  std::cout << "onServiceResponse ...\n";
+int onServiceResponse(const void* res, void* owner, void*) {
+  if (!res || !owner) return -1;
 
-  if (!res) return;
-
-  Message* response = static_cast<Message*>(res);
+  const Message* response = static_cast<const Message*>(res);
+  UpaGrpcClient* client = static_cast<UpaGrpcClient*>(owner);
   size_t data_size;
+
+  std::cout << "onServiceResponse... name[" << client->GetName() << "], msg_type["
+            << MsgTypeStr(client->GetMsgType()) << "]\n";
 
   PrintMessage(response, false);
 
@@ -39,6 +41,26 @@ void onServiceResponse(void* res) {
     std::cout << " Response TestData = [" << resData.id << ", " << resData.value
               << ", " << resData.name << "]" << std::endl;
   }
+
+  return 0;
+}
+
+int onConnect(void* owner, void*) {
+  UpaGrpcClient* client = static_cast<UpaGrpcClient*>(owner);
+
+  std::cout << "onConnect... name[" << client->GetName() << "], msg_type["
+            << MsgTypeStr(client->GetMsgType()) << "]\n";
+
+  return 0;
+}
+
+int onClose(void* owner, void*) {
+  UpaGrpcClient* client = static_cast<UpaGrpcClient*>(owner);
+
+  std::cout << "onClose... name[" << client->GetName() << "], msg_type["
+            << MsgTypeStr(client->GetMsgType()) << "]\n";
+
+  return 0;
 }
 
 void sendTestMessage(UpaGrpcClient* client) {
@@ -66,8 +88,10 @@ int main(int argc, char** argv) {
   absl::ParseCommandLine(argc, argv);
   std::string target_str = absl::GetFlag(FLAGS_target);
 
-  UpaGrpcClient client(target_str, MSG_TYPE_DBIF, onServiceResponse);
+  UpaGrpcClient client(target_str, "UPA_GRPC:CLIENT", MSG_TYPE_DBIF, onServiceResponse);
   client.SetReconnectBackoff(5000, 5000);
+  client.SetOnConnect(onConnect);
+  client.SetOnClose(onClose);
 
   int rv = client.Start();
   if (rv < 0) return rv;

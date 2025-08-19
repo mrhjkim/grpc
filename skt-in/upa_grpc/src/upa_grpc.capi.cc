@@ -20,6 +20,9 @@ void upa_grpc_message_destroy(upa_grpc_message_t* msg) {
   if (msg) delete static_cast<Message*>(msg);
 }
 
+const char* upa_grpc_msg_type_str(upa_grpc_msg_type_e e) {
+  return MsgTypeStr(static_cast<int>(e));
+}
 int upa_grpc_message_get_msg_type(const upa_grpc_message_t* msg) {
   if (!msg) return -1;
   return GetMsgType(static_cast<const Message*>(msg));
@@ -89,16 +92,18 @@ void upa_grpc_message_print(const upa_grpc_message_t* msg, int is_send) {
 
 // C API of the gRPC Protocol Adapter Client class.
 upa_grpc_client_handler upa_grpc_client_create(
-    const char* ip, unsigned short port, upa_grpc_msg_type_e msg_type,
-    upa_grpc_client_callback_f callback) {
-  if (!ip) return NULL;
-  return new UpaGrpcClient(ip, port, static_cast<MsgType>(msg_type), callback);
+    const char* ip, unsigned short port, const char* name,
+    upa_grpc_msg_type_e msg_type, upa_grpc_client_on_read_f callback) {
+  if (!ip || !name) return NULL;
+  return new UpaGrpcClient(ip, port, name, static_cast<MsgType>(msg_type), callback);
 }
 /*
-upa_grpc_client_handler upa_grpc_client_create(const char* target,
-                                               upa_grpc_msg_type_e msg_type, upa_grpc_client_callback_f callback) {
-  if (!target) return NULL;
-  return new UpaGrpcClient(target, static_cast<MsgType>(msg_type), callback);
+upa_grpc_client_handler upa_grpc_client_create(
+    const char* target, const char* name, upa_grpc_msg_type_e msg_type,
+    upa_grpc_client_on_read_f callback) {
+  if (!target || !name) return NULL;
+  return new UpaGrpcClient(target, name, static_cast<MsgType>(msg_type),
+                           callback);
 }
 */
 
@@ -135,6 +140,63 @@ int upa_grpc_client_wait_for_connected(upa_grpc_client_handler handler,
   return static_cast<UpaGrpcClient*>(handler)->WaitForConnected(wait_sec);
 }
 
+const char* upa_grpc_client_get_target(upa_grpc_client_handler handler) {
+  if (!handler) return "";
+  return static_cast<UpaGrpcClient*>(handler)->GetTarget();
+}
+
+const char* upa_grpc_client_get_name(upa_grpc_client_handler handler) {
+  if (!handler) return "";
+  return static_cast<UpaGrpcClient*>(handler)->GetName();
+}
+
+int upa_grpc_client_get_msg_type(upa_grpc_client_handler handler) {
+  if (!handler) return UPA_GRPC_MSG_TYPE_MIN-1;
+  return static_cast<UpaGrpcClient*>(handler)->GetMsgType();
+}
+
+upa_grpc_client_on_read_f upa_grpc_client_get_on_read(
+    upa_grpc_client_handler handler) {
+  if (!handler) return NULL;
+  return static_cast<UpaGrpcClient*>(handler)->GetOnRead();
+}
+
+upa_grpc_client_on_connect_f upa_grpc_client_get_on_connect(
+    upa_grpc_client_handler handler) {
+  if (!handler) return NULL;
+  return static_cast<UpaGrpcClient*>(handler)->GetOnConnect();
+}
+void upa_grpc_client_set_on_connect(upa_grpc_client_handler handler,
+                                    upa_grpc_client_on_connect_f callback) {
+  if (!handler) return;
+  static_cast<UpaGrpcClient*>(handler)->SetOnConnect(callback);
+}
+
+upa_grpc_client_on_close_f upa_grpc_client_get_on_close(
+    upa_grpc_client_handler handler) {
+  if (!handler) return NULL;
+  return static_cast<UpaGrpcClient*>(handler)->GetOnClose();
+}
+void upa_grpc_client_set_on_close(upa_grpc_client_handler handler,
+                                  upa_grpc_client_on_close_f callback) {
+  if (!handler) return;
+  static_cast<UpaGrpcClient*>(handler)->SetOnClose(callback);
+}
+
+void upa_grpc_client_set_reconnect_backoff(upa_grpc_client_handler handler,
+                                           int min, int max);
+
+void* upa_grpc_client_get_user_data(upa_grpc_client_handler handler) {
+  if(!handler) return NULL;
+  return static_cast<UpaGrpcClient*>(handler)->GetUserData();
+}
+
+void upa_grpc_client_set_user_data(upa_grpc_client_handler handler,
+                                   void* user_data) {
+  if (!handler) return;
+  static_cast<UpaGrpcClient*>(handler)->SetUserData(user_data);
+}
+
 void upa_grpc_client_set_reconnect_backoff(upa_grpc_client_handler handler,
                                            int min, int max) {
   if (!handler) return;
@@ -152,17 +214,19 @@ int upa_grpc_client_send(upa_grpc_client_handler handler,
 
 // C API of OcsInterfaceServer
 upa_grpc_server_handler upa_grpc_server_create(
-    const char* ip, unsigned short port, upa_grpc_msg_type_e msg_type,
-    upa_grpc_server_callback_f callback) {
-  if (!ip || !callback) return NULL;
-  return new UpaGrpcServer(ip, port, static_cast<MsgType>(msg_type), callback);
+    const char* ip, unsigned short port, const char* name,
+    upa_grpc_msg_type_e msg_type, upa_grpc_server_on_read_f callback) {
+  if (!ip || !name || !callback) return NULL;
+  return new UpaGrpcServer(ip, port, name, static_cast<MsgType>(msg_type),
+                           callback);
 }
 /*
 upa_grpc_server_handler upa_grpc_server_create(
-    const char* target, upa_grpc_msg_type_e msg_type,
-    upa_grpc_server_callback_f callback) {
-  if (!target || !callback) return NULL;
-  return new UpaGrpcServer(target, static_cast<MsgType>(msg_type), callback);
+    const char* target, const char* name, upa_grpc_msg_type_e msg_type,
+    upa_grpc_server_on_read_f callback) {
+  if (!target || !name || !callback) return NULL;
+  return new UpaGrpcServer(target, name, static_cast<MsgType>(msg_type),
+                           callback);
 }
 */
 
@@ -181,10 +245,99 @@ void upa_grpc_server_stop(upa_grpc_server_handler handler) {
   static_cast<UpaGrpcServer*>(handler)->Stop();
 }
 
-int upa_grpc_server_send(upa_grpc_server_reactor_t* ract,
-                         upa_grpc_message_t* msg) {
-  int rv = UpaGrpcServerSend(static_cast<UpaGrpcServerReactorClass*>(ract),
-                             static_cast<Message*>(msg));
+const char* upa_grpc_server_get_addr(upa_grpc_server_handler handler) {
+  if (!handler) return "";
+  return static_cast<UpaGrpcServer*>(handler)->GetAddr();
+}
+
+const char* upa_grpc_server_get_name(upa_grpc_server_handler handler) {
+  if (!handler) return "";
+  return static_cast<UpaGrpcServer*>(handler)->GetName();
+}
+
+int upa_grpc_server_get_msg_type(upa_grpc_server_handler handler) {
+  if (!handler) return UPA_GRPC_MSG_TYPE_MIN-1;
+  return static_cast<UpaGrpcServer*>(handler)->GetMsgType();
+}
+upa_grpc_server_on_read_f upa_grpc_server_get_on_read(
+    upa_grpc_server_handler handler) {
+  if (!handler) return NULL;
+  return static_cast<UpaGrpcServer*>(handler)->GetOnRead();
+}
+
+upa_grpc_server_on_accept_f upa_grpc_server_get_on_accept(
+    upa_grpc_server_handler handler) {
+  if (!handler) return NULL;
+  return static_cast<UpaGrpcServer*>(handler)->GetOnAccept();
+}
+void upa_grpc_server_set_on_accept(upa_grpc_server_handler handler,
+                                   upa_grpc_server_on_accept_f callback) {
+  if (!handler) return;
+  static_cast<UpaGrpcServer*>(handler)->SetOnAccept(callback);
+}
+
+upa_grpc_server_on_close_f upa_grpc_server_get_on_close(
+    upa_grpc_server_handler handler) {
+  if (!handler) return NULL;
+  return static_cast<UpaGrpcServer*>(handler)->GetOnClose();
+}
+void upa_grpc_server_set_on_close(upa_grpc_server_handler handler,
+                                  upa_grpc_server_on_close_f callback) {
+  if (!handler) return;
+  static_cast<UpaGrpcServer*>(handler)->SetOnClose(callback);
+}
+
+void* upa_grpc_server_get_user_data(upa_grpc_server_handler handler) {
+  if(!handler) return NULL;
+  return static_cast<UpaGrpcServer*>(handler)->GetUserData();
+}
+void upa_grpc_server_set_user_data(upa_grpc_server_handler handler,
+                                   void* user_data) {
+  if (!handler) return;
+  static_cast<UpaGrpcServer*>(handler)->SetUserData(user_data);
+}
+
+upa_grpc_server_reactor_t* upa_grpc_server_get_reactor_n(
+    upa_grpc_server_handler handler, const char* ract_name) {
+  if (!handler || !ract_name) return NULL;
+  return static_cast<UpaGrpcServer*>(handler)->GetReactor(ract_name);
+}
+upa_grpc_server_reactor_t* upa_grpc_server_get_reactor_i(
+    upa_grpc_server_handler handler, int ract_idx) {
+  if (!handler) return NULL;
+  return static_cast<UpaGrpcServer*>(handler)->GetReactor(ract_idx);
+}
+
+const char* upa_grpc_server_get_reactor_name(upa_grpc_server_handler handler,
+                                             upa_grpc_server_reactor_t* ract) {
+  if (!handler || !ract) return "";
+  return static_cast<UpaGrpcServer*>(handler)
+      ->GetReactorName(static_cast<UpaGrpcServerReactorClass*>(ract));
+}
+
+int upa_grpc_server_send(upa_grpc_server_handler handler,
+                         upa_grpc_message_t* msg,
+                         upa_grpc_server_reactor_t* ract) {
+  if (!handler) return -1;
+  int rv = static_cast<UpaGrpcServer*>(handler)->Send(
+      static_cast<Message*>(msg),
+      static_cast<UpaGrpcServerReactorClass*>(ract));
+  if (rv == 0) upa_grpc_message_destroy(msg);
+  return rv;
+}
+int upa_grpc_server_send_n(upa_grpc_server_handler handler,
+                           upa_grpc_message_t* msg, const char* ract_name) {
+  if (!handler) return -1;
+  int rv = static_cast<UpaGrpcServer*>(handler)->Send(
+      static_cast<Message*>(msg), ract_name);
+  if (rv == 0) upa_grpc_message_destroy(msg);
+  return rv;
+}
+int upa_grpc_server_send_i(upa_grpc_server_handler handler,
+                           upa_grpc_message_t* msg, int ract_idx) {
+  if (!handler) return -1;
+  int rv = static_cast<UpaGrpcServer*>(handler)->Send(
+      static_cast<Message*>(msg), ract_idx);
   if (rv == 0) upa_grpc_message_destroy(msg);
   return rv;
 }
