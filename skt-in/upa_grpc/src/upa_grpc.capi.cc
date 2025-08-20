@@ -122,11 +122,9 @@ int upa_grpc_client_start_reactor(upa_grpc_client_handler handler) {
   return static_cast<UpaGrpcClient*>(handler)->StartReactor();
 }
 
-void upa_grpc_client_stop_reactor(upa_grpc_client_handler handler,
-                                  int send_done_flag) {
-  if (!handler) return;
-  static_cast<UpaGrpcClient*>(handler)->StopReactor(
-      static_cast<bool>(send_done_flag));
+void upa_grpc_client_stop_reactor(upa_grpc_client_handler handler) {
+    if (!handler) return;
+  static_cast<UpaGrpcClient*>(handler)->StopReactor();
 }
 
 int upa_grpc_client_get_state(upa_grpc_client_handler handler) {
@@ -245,6 +243,23 @@ void upa_grpc_server_stop(upa_grpc_server_handler handler) {
   static_cast<UpaGrpcServer*>(handler)->Stop();
 }
 
+void upa_grpc_server_stop_reactor(upa_grpc_server_handler handler,
+                                  upa_grpc_server_reactor_t* ract) {
+  if (!handler) return;
+  static_cast<UpaGrpcServer*>(handler)->StopReactor(
+      static_cast<UpaGrpcServerReactorClass*>(ract));
+}
+void upa_grpc_server_stop_reactor_n(upa_grpc_server_handler handler,
+                                    const char* ract_name) {
+  if (!handler) return;
+  static_cast<UpaGrpcServer*>(handler)->StopReactor(ract_name);
+}
+void upa_grpc_server_stop_reactor_i(upa_grpc_server_handler handler,
+                                    int ract_idx) {
+  if (!handler) return;
+  static_cast<UpaGrpcServer*>(handler)->StopReactor(ract_idx);
+}
+
 const char* upa_grpc_server_get_addr(upa_grpc_server_handler handler) {
   if (!handler) return "";
   return static_cast<UpaGrpcServer*>(handler)->GetAddr();
@@ -313,6 +328,11 @@ const char* upa_grpc_server_get_reactor_name(upa_grpc_server_handler handler,
   if (!handler || !ract) return "";
   return static_cast<UpaGrpcServer*>(handler)
       ->GetReactorName(static_cast<UpaGrpcServerReactorClass*>(ract));
+}
+
+int upa_grpc_server_get_reactor_count(upa_grpc_server_handler handler) {
+  if (!handler) return 0;
+  return static_cast<UpaGrpcServer*>(handler)->GetReactorCount();
 }
 
 int upa_grpc_server_send(upa_grpc_server_handler handler,

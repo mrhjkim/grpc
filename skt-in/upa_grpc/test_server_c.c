@@ -77,10 +77,11 @@ int onAccept(void* owner, void* ract) {
   upa_grpc_server_handler server = (upa_grpc_server_handler)owner;
   upa_grpc_server_reactor_t* reactor = (upa_grpc_server_reactor_t*)ract;
 
-  printf("onAccept... name[%s], msg_type[%s], peer[%s]\n",
+  printf("onAccept... name[%s], msg_type[%s], peer[%s], peer_count[%d]\n",
          upa_grpc_server_get_name(server),
          upa_grpc_msg_type_str(upa_grpc_server_get_msg_type(server)),
-         upa_grpc_server_get_reactor_name(server, reactor));
+         upa_grpc_server_get_reactor_name(server, reactor),
+         upa_grpc_server_get_reactor_count(server));
 
   return 0;
 }
@@ -91,10 +92,11 @@ int onClose(void* owner, void* ract) {
   upa_grpc_server_handler server = (upa_grpc_server_handler)owner;
   upa_grpc_server_reactor_t* reactor = (upa_grpc_server_reactor_t*)ract;
 
-  printf("onClose... name[%s], msg_type[%s], peer[%s]\n",
+  printf("onClose... name[%s], msg_type[%s], peer[%s], peer_count[%d]\n",
          upa_grpc_server_get_name(server),
          upa_grpc_msg_type_str(upa_grpc_server_get_msg_type(server)),
-         upa_grpc_server_get_reactor_name(server, reactor));
+         upa_grpc_server_get_reactor_name(server, reactor),
+         upa_grpc_server_get_reactor_count(server));
 
   return 0;
 }

@@ -35,8 +35,8 @@ int onServiceRequest(const void* req, void* owner, void* ract) {
 
   const Message* request = static_cast<const Message*>(req);
   UpaGrpcServer* server = static_cast<UpaGrpcServer*>(owner);
-  grpc::ServerBidiReactor<Message, Message>* reactor =
-      static_cast<grpc::ServerBidiReactor<Message, Message>*>(ract);
+  UpaGrpcServerReactorClass* reactor =
+      static_cast<UpaGrpcServerReactorClass*>(ract);
 
   std::cout << "onServiceRequest... name[" << server->GetName()
             << "], msg_type[" << MsgTypeStr(server->GetMsgType()) << "], peer["
@@ -81,12 +81,13 @@ int onAccept(void* owner, void* ract) {
   if (!owner || !ract) return -1;
 
   UpaGrpcServer* server = static_cast<UpaGrpcServer*>(owner);
-  grpc::ServerBidiReactor<Message, Message>* reactor =
-      static_cast<grpc::ServerBidiReactor<Message, Message>*>(ract);
+  UpaGrpcServerReactorClass* reactor =
+      static_cast<UpaGrpcServerReactorClass*>(ract);
 
-  std::cout << "onAccept... name[" << server->GetName()
-            << "], msg_type[" << MsgTypeStr(server->GetMsgType()) << "], peer["
-            << server->GetReactorName(reactor) << "]" << std::endl;
+  std::cout << "onAccept... name[" << server->GetName() << "], msg_type["
+            << MsgTypeStr(server->GetMsgType()) << "], peer["
+            << server->GetReactorName(reactor) << "], peer_count["
+            << server->GetReactorCount() << "]" << std::endl;
 
   return 0;
 }
@@ -95,12 +96,13 @@ int onClose(void* owner, void* ract) {
   if (!owner || !ract) return -1;
 
   UpaGrpcServer* server = static_cast<UpaGrpcServer*>(owner);
-  grpc::ServerBidiReactor<Message, Message>* reactor =
-      static_cast<grpc::ServerBidiReactor<Message, Message>*>(ract);
+  UpaGrpcServerReactorClass* reactor =
+      static_cast<UpaGrpcServerReactorClass*>(ract);
 
-  std::cout << "onClose... name[" << server->GetName()
-            << "], msg_type[" << MsgTypeStr(server->GetMsgType()) << "], peer["
-            << server->GetReactorName(reactor) << "]" << std::endl;
+  std::cout << "onClose... name[" << server->GetName() << "], msg_type["
+            << MsgTypeStr(server->GetMsgType()) << "], peer["
+            << server->GetReactorName(reactor) << "], peer_count["
+            << server->GetReactorCount() << "]" << std::endl;
 
   return 0;
 }

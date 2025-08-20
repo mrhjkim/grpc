@@ -66,10 +66,10 @@ int onClose(void* owner, void*) {
 void sendTestMessage(UpaGrpcClient* client) {
   while (!client->WaitForConnected(5)) {
     std::cout << "Wating for channel to be ready..." << std::endl;
-    client->StopReactor(true);
+    client->StopReactor();
   }
-  std::cout << "Current channel status is " << client->GetState() << "."
-            << std::endl;
+  int status = client->GetState();
+  std::cout << "Current channel status is " << status << "." << std::endl;
 
   Message request;
   SetSrcId(&request, "SCPAS2P");

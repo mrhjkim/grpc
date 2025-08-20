@@ -14,7 +14,7 @@ struct TestData {
 char _g_ip[32] = {"127.0.0.1"};
 unsigned short _g_port = 50051;
 
-int onServiceResponse(const void* res, void* owner, void*) {
+int onServiceResponse(const void* res, void* owner, void* _) {
   if (!res || !owner) return -1;
 
   upa_grpc_message_t* response = (upa_grpc_message_t*)res;
@@ -38,7 +38,7 @@ int onServiceResponse(const void* res, void* owner, void*) {
   return 0;
 }
 
-int onConnect(void* owner, void*) {
+int onConnect(void* owner, void* _) {
   if (!owner) return -1;
 
   upa_grpc_client_handler client = (upa_grpc_client_handler)owner;
@@ -50,7 +50,7 @@ int onConnect(void* owner, void*) {
   return 0;
 }
 
-int onClose(void* owner, void*) {
+int onClose(void* owner, void* _) {
   if (!owner) return -1;
 
   upa_grpc_client_handler client = (upa_grpc_client_handler)owner;
@@ -113,7 +113,7 @@ final:
 void sendTestMessage(upa_grpc_client_handler handler) {
   while (!upa_grpc_client_wait_for_connected(handler, 5)) {
     printf("Wating for channel to be ready...\n");
-    upa_grpc_client_stop_reactor(handler, 1);
+    upa_grpc_client_stop_reactor(handler);
   }
   printf("Current channel status is %d.\n", upa_grpc_client_get_state(handler));
 

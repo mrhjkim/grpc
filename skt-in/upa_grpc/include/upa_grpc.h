@@ -52,8 +52,10 @@ using UpaGrpcClientReactorClass =
     grpc::ClientBidiReactor<upa_grpc::Message, upa_grpc::Message>;
 
 /// @brief server service 객체에서 사용되는 reactor (bidirectional stream 방식)
-using UpaGrpcServerReactorClass =
+using UpaGrpcServerReactor =
     grpc::ServerBidiReactor<upa_grpc::Message, upa_grpc::Message>;
+
+class UpaGrpcServerReactorClass;
 
 /**
  * API of Message struct
@@ -102,7 +104,7 @@ class UpaGrpcClient {
   // start client reactor
   int StartReactor();
   // stop client reactor
-  void StopReactor(bool sendDoneFlag);  
+  void StopReactor();
   // check channel status
   int GetState();                       
   // wait for the channel connected
@@ -123,6 +125,10 @@ class UpaGrpcClient {
 
   void* GetUserData();
   void SetUserData(void* userdata);
+
+  UpaGrpcClientReactorClass* GetReactor();
+  int SetReactor(UpaGrpcClientReactorClass* reactor);
+  int DeleteReactor();
 
   int Send(upa_grpc::Message* msg);
 
@@ -145,7 +151,6 @@ class UpaGrpcClient {
 /**
  * UpaGrpcServer
  */
-
 class UpaGrpcServer {
  public:
   UpaGrpcServer(std::string ip, uint16_t port, std::string name,
@@ -169,6 +174,10 @@ class UpaGrpcServer {
   void Start(); 
   // server를 shutdown 합니다. Start에서 생성된 thread는 종료됩니다.
   void Stop(); 
+  // server에 연결된 peer(reactor)를 연결 해제합니다.
+  void StopReactor(UpaGrpcServerReactorClass* reactor);
+  void StopReactor(std::string reactor_name);
+  void StopReactor(int reactor_idx);
 
   const char* GetAddr();
   const char* GetName();
@@ -186,11 +195,13 @@ class UpaGrpcServer {
 
   UpaGrpcServerReactorClass* GetReactor(std::string name);
   UpaGrpcServerReactorClass* GetReactor(int idx);
-  const char* GetReactorName(UpaGrpcServerReactorClass* reactor);
-  const char* GetReactorName(int idx);
-  int SetReactor(UpaGrpcServerReactorClass* reactor, std::string name);
+  int SetReactor(UpaGrpcServerReactorClass* reactor);
   int DeleteReactor(std::string name);
   int DeleteReactor(int idx);
+  const char* GetReactorName(UpaGrpcServerReactorClass* reactor);
+  const char* GetReactorName(int idx);
+  int GetReactorIdx(UpaGrpcServerReactorClass* reactor);
+  int GetReactorCount();
 
   int Send(upa_grpc::Message* msg, UpaGrpcServerReactorClass* reactor);
   int Send(upa_grpc::Message* msg, std::string reactor_name);
@@ -207,9 +218,9 @@ class UpaGrpcServer {
   std::unique_ptr<grpc::Server> server_ = nullptr;
 
   UpaGrpcServerReactorClass* reactor_array_[MAX_UPA_GRPC_SERVER_REACTOR];
-  std::string reactor_name_array_[MAX_UPA_GRPC_SERVER_REACTOR];
   void initReactorArray();
  // TODO: lock 추가, 구조개선(reactor array 관리 class??)
 };
+
 
 #endif  // __UPA_GRPC_H__
