@@ -105,11 +105,12 @@ void PrintMessage(const Message* msg, bool is_send) {
  * Implementation of the UpaGrpcClient class.
  */
 
-class UpaGrpcClientReactor : public UpaGrpcClientReactorClass {
+class UpaGrpcClientReactorClass final : public UpaGrpcClientReactor {
  public:
-  explicit UpaGrpcClientReactor(UpaGrpcService::Stub* stub,
-                                UpaGrpcClient* owner)
-      : stub_(stub), owner_(owner) {
+  explicit UpaGrpcClientReactorClass(std::shared_ptr<grpc::Channel> channel,
+                                     std::unique_ptr<UpaGrpcService::Stub> stub,
+                                     UpaGrpcClient* owner)
+      : channel_(std::move(channel)), stub_(std::move(stub)), owner_(owner) {
     // Start the RPC; the library will call OnDone/OnReadDone/OnWriteDone
     stub_->async()->SendMessage(&ctx_, this);
 
@@ -117,11 +118,20 @@ class UpaGrpcClientReactor : public UpaGrpcClientReactorClass {
     StartCall();
 
     // 연결 상태 변경 시 on connect/close callback 호출된다.
-    if(owner_) owner_->GetState(); 
+    if (owner_) owner_->GetState();
   }
 
-  ~UpaGrpcClientReactor() {
+  ~UpaGrpcClientReactorClass() {
     if (owner_) owner_->DeleteReactor();
+
+    if (channel_ != nullptr) {
+      channel_.reset();
+      channel_ = nullptr;
+    }
+    if (stub_ != nullptr) {
+      stub_.reset();
+      stub_ = nullptr;
+    }
   }
 
   void OnReadDone(bool ok) override {
@@ -136,31 +146,86 @@ class UpaGrpcClientReactor : public UpaGrpcClientReactorClass {
 
   void OnWriteDone(bool /*ok*/) override {
     // write failed or stream closed by server
-
-    // 연결 상태 변경 시 on connect/close callback 호출된다.
-    if(owner_) owner_->GetState(); 
   }
 
   void OnDone(const grpc::Status& status) override {
     // RPC failed or finished cleanly
 
-    // 연결 상태 변경 시 on connect/close callback 호출된다.
-    if(owner_) owner_->GetState(); 
-
     delete this;
   }
 
+  void Close() {
+    StartWritesDone();
+    ctx_.TryCancel();  // RPC 전체 취소, TCP close와 유사
+  }
+
+  int GetState() {
+    if (channel_ == nullptr) return static_cast<int>(GRPC_CHANNEL_IDLE);
+    return static_cast<int>(channel_->GetState(false));
+  }
+
+  bool WaitForConnected(int wait_sec) {
+    if (channel_ == nullptr) {
+      sleep(wait_sec > 0 ? wait_sec : 1);
+      return false;
+    }
+
+    bool connected = false;
+    std::chrono::time_point deadline =
+        std::chrono::system_clock::now() + std::chrono::seconds(wait_sec);
+#if 0
+    connected = channel_->WaitForConnected(deadline);
+#else
+    channel_->NotifyOnStateChange(channel_->GetState(true), deadline, cq_.get(),
+                                  this);
+    void* tag = nullptr;
+    bool ok = false;
+    if (cq_->Next(&tag, &ok)) {  // 대기
+      connected = (GetState() == GRPC_CHANNEL_READY) ? true : false;
+    }
+#endif
+    return connected;
+  }
+
  private:
-  UpaGrpcService::Stub* stub_;
+  std::shared_ptr<grpc::Channel> channel_;
+  std::unique_ptr<UpaGrpcService::Stub> stub_;
   UpaGrpcClient* owner_;
   grpc::ClientContext ctx_;
   Message read_msg_;
+  std::unique_ptr<grpc::CompletionQueue> cq_{new grpc::CompletionQueue};
 };
 
 int UpaGrpcClient::Start() {
-  if (channel_ != nullptr) {
-    std::cout << "Already created channel." << std::endl;
+  if (start_flag_ == true) {
+    std::cout << "Already started grpc client." << std::endl;
     return 1;
+  }
+
+  start_flag_ = true;
+
+  return StartReactor();
+}
+
+void UpaGrpcClient::Stop() {
+  if( start_flag_ == true ) {
+    StopReactor();
+    GetState();
+    start_flag_ = false;
+  }
+}
+
+int UpaGrpcClient::StartReactor() {
+  std::shared_ptr<grpc::Channel> channel = nullptr;
+  std::unique_ptr<UpaGrpcService::Stub> stub = nullptr;
+
+  if (reactor_ != nullptr) {
+    std::cout << "Already started grpc client reactor." << std::endl;
+    return 1;
+  }
+  if( start_flag_ == false ) {
+    std::cout << "Do not started grpc client." << std::endl;
+    return -1;
   }
 
   if (min_backoff_ > 0 || max_backoff_ > 0) {
@@ -172,53 +237,40 @@ int UpaGrpcClient::Start() {
     if (max_backoff_ > 0) {
       args.SetInt(GRPC_ARG_MAX_RECONNECT_BACKOFF_MS, max_backoff_);
     }
-    channel_ = grpc::CreateCustomChannel(
+    channel = grpc::CreateCustomChannel(
         target_, grpc::InsecureChannelCredentials(), args);
   } else {
-    channel_ = grpc::CreateChannel(target_, grpc::InsecureChannelCredentials());
+    channel = grpc::CreateChannel(target_, grpc::InsecureChannelCredentials());
   }
-  if (channel_ == nullptr) {
+  if (channel == nullptr) {
     std::cout << "Create channel failed. target(" << target_ << ")"
               << std::endl;
     return -1;
   }
-  stub_ = UpaGrpcService::NewStub(channel_);
 
-  return StartReactor();
-}
-
-void UpaGrpcClient::Stop() {
-  StopReactor();
-  //DeleteReactor();
-  if (channel_ != nullptr) {
-    channel_.reset();
-    channel_ = nullptr;
-  }
-  if (stub_ != nullptr) {
-    stub_.reset();
-    stub_ = nullptr;
-  }
-  GetState();
-}
-
-int UpaGrpcClient::StartReactor() {
-  if (reactor_ != nullptr) {
-    std::cout << "Already created reactor." << std::endl;
-    return 1;
-  }
-  if (stub_ == nullptr || channel_ == nullptr) {
-    std::cout << "Not created channel." << std::endl;
+  stub = UpaGrpcService::NewStub(channel);
+  if (stub == nullptr) {
+    std::cout << "Create stub failed. target(" << target_ << ")" << std::endl;
     return -1;
   }
 
-  reactor_ = new UpaGrpcClientReactor(stub_.get(), this);
+  reactor_ =
+      new UpaGrpcClientReactorClass(std::move(channel), std::move(stub), this);
 
   return 0;
 }
 
 void UpaGrpcClient::StopReactor() {
-  if(reactor_ == nullptr) return; 
-  reactor_->StartWritesDone();  // Inform server we are done sending
+  if (reactor_ != nullptr) {
+    reactor_->Close();
+    DeleteReactor();
+    GetState();
+  }
+}
+
+void UpaGrpcClient::RestartReactor() {
+  StopReactor();
+  StartReactor();
 }
 
 /// @brief 채널 연결 상태 조회
@@ -226,7 +278,7 @@ void UpaGrpcClient::StopReactor() {
 /// @return channel state (GRPC_CHANNEL_IDLE/CONNECTING/READY/FAILURE/SHUTWODN)
 int UpaGrpcClient::GetState() {
   int state = GRPC_CHANNEL_IDLE;
-  if (channel_ != nullptr) state = static_cast<int>(channel_->GetState(false));
+  if (reactor_ != nullptr) state = reactor_->GetState();
 
   if (last_channel_state_ != GRPC_CHANNEL_READY &&
       state == GRPC_CHANNEL_READY) {
@@ -244,9 +296,17 @@ int UpaGrpcClient::GetState() {
 /// @param wait_sec 대기시간 (단위:초)
 /// @return true: ready 상태, false: 그 외 상태
 bool UpaGrpcClient::WaitForConnected(int wait_sec) {
-  std::chrono::time_point deadline =
-      std::chrono::system_clock::now() + std::chrono::seconds(wait_sec);
-  return channel_->WaitForConnected(deadline);
+  if (reactor_ == nullptr) {
+    sleep(wait_sec > 0 ? wait_sec : 1);
+
+    // server shutdown 등으로 reactor 객체가 OnDone callback 처리 후
+    // 소멸 되는 경우가 있을 수 있다. 이 경우 해당 객체를 생성해준다.
+    if (start_flag_ == true) StartReactor();
+
+    if (reactor_ == nullptr) return false;
+  }
+
+  return reactor_->WaitForConnected(wait_sec);
 }
 
 /// @brief client 객체 생성 시 등록한 server에 접속할 주소 정보 조회
@@ -309,7 +369,7 @@ int UpaGrpcClient::SetReactor(UpaGrpcClientReactorClass* reactor) {
   return 0;
 }
 int UpaGrpcClient::DeleteReactor() {
-  if(reactor_ == nullptr) return -1; // not exists
+  if (reactor_ == nullptr) return -1;  // not exists
   reactor_ = nullptr;
   return 0;
 }
@@ -318,8 +378,12 @@ int UpaGrpcClient::DeleteReactor() {
 /// @param msg 전송할 메시지
 /// @return result code (0:success, -1:접속 실패 등)
 int UpaGrpcClient::Send(Message* msg) {
+  if (start_flag_ == false ) return -1; // Do not started grpc client
+
+  // server shutdown 등으로 reactor 객체가 OnDone callback 처리 후
+  // 소멸 되는 경우가 있을 수 있다. 이 경우 해당 객체를 생성해준다.
   if (reactor_ == nullptr) StartReactor();
-  if (reactor_ == nullptr) return -1;
+  if (GetState() != GRPC_CHANNEL_READY) return -1;  // not opened
 
   msg->set_msg_type(msg_type_);
 
@@ -363,12 +427,15 @@ class UpaGrpcServerReactorClass final : public UpaGrpcServerReactor {
   void OnWriteDone(bool /*ok*/) override;
   void OnDone() override;
 
+  void Close();
+
   void SetName(std::string name);
   const char* GetName();
 
  private:
   grpc::CallbackServerContext* context_;
   UpaGrpcServiceImpl* owner_;
+  UpaGrpcServerReactorClass* reactor_ = nullptr;
   std::string name_;
   Message read_msg_;
 };
@@ -420,6 +487,13 @@ void UpaGrpcServerReactorClass::OnWriteDone(bool /*ok*/) {
 void UpaGrpcServerReactorClass::OnDone() {
   // RPC finished
   delete this;
+}
+
+void UpaGrpcServerReactorClass::Close() {
+  OnWriteDone(true);
+  if (context_ != nullptr) {
+    context_->TryCancel();  // RPC 전체 취소, TCP close와 유사
+  }
 }
 
 void UpaGrpcServerReactorClass::SetName(std::string name) { name_ = name; }
@@ -506,7 +580,7 @@ void UpaGrpcServer::Stop() {
     for (int i = 0; i < MAX_UPA_GRPC_SERVER_REACTOR; i++) {
       if (reactor_array_[i] == nullptr) continue;
       StopReactor(i);
-      //DeleteReactor(i);
+      // DeleteReactor(i);
     }
     server_->Shutdown();
     server_->Wait();
@@ -519,7 +593,7 @@ void UpaGrpcServer::Stop() {
 
 void UpaGrpcServer::StopReactor(UpaGrpcServerReactorClass* reactor) {
   if (reactor == nullptr) return;
-  reactor->OnWriteDone(true);
+  reactor->Close();
 }
 void UpaGrpcServer::StopReactor(std::string reactor_name) {
   StopReactor(GetReactor(reactor_name));
@@ -605,7 +679,7 @@ int UpaGrpcServer::DeleteReactor(std::string name) {
       return 0;
     }
   }
-  return -1; // not found
+  return -1;  // not found
 }
 int UpaGrpcServer::DeleteReactor(int idx) {
   if (idx < 0 || idx >= MAX_UPA_GRPC_SERVER_REACTOR) return -1;

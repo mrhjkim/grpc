@@ -48,13 +48,13 @@ using UpaGrpcOnConnectCallback = int (*)(void* owner, void*);
 using UpaGrpcOnCloseCallback = int (*)(void* owner, void* ract);
 
 /// @brief client service 객체에서 사용되는 reactor (bidirectional stream 방식)
-using UpaGrpcClientReactorClass =
+using UpaGrpcClientReactor =
     grpc::ClientBidiReactor<upa_grpc::Message, upa_grpc::Message>;
+class UpaGrpcClientReactorClass;
 
 /// @brief server service 객체에서 사용되는 reactor (bidirectional stream 방식)
 using UpaGrpcServerReactor =
     grpc::ServerBidiReactor<upa_grpc::Message, upa_grpc::Message>;
-
 class UpaGrpcServerReactorClass;
 
 /**
@@ -105,6 +105,8 @@ class UpaGrpcClient {
   int StartReactor();
   // stop client reactor
   void StopReactor();
+  // restart(stop and start) client reactor
+  void RestartReactor();
   // check channel status
   int GetState();                       
   // wait for the channel connected
@@ -142,10 +144,9 @@ class UpaGrpcClient {
   int min_backoff_ = 0;  // min reconnect backoff time (msec)
   int max_backoff_ = 0;  // max reconnect backoff time (msec)
   void *userdata_ = nullptr;
-  std::shared_ptr<grpc::Channel> channel_ = nullptr;
-  std::unique_ptr<upa_grpc::UpaGrpcService::Stub> stub_ = nullptr;
   UpaGrpcClientReactorClass* reactor_ = nullptr;
   int last_channel_state_ = GRPC_CHANNEL_IDLE;
+  std::atomic<bool> start_flag_ = false;
 };
 
 /**

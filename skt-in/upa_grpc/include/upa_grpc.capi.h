@@ -77,6 +77,7 @@ int upa_grpc_client_start(upa_grpc_client_handler handler);
 void upa_grpc_client_stop(upa_grpc_client_handler handler);
 int upa_grpc_client_start_reactor(upa_grpc_client_handler handler);
 void upa_grpc_client_stop_reactor(upa_grpc_client_handler handler);
+void upa_grpc_client_restart_reactor(upa_grpc_client_handler handler);
 int upa_grpc_client_get_state(upa_grpc_client_handler handler);
 int upa_grpc_client_wait_for_connected(upa_grpc_client_handler handler,
                                        int wait_sec);
@@ -146,6 +147,8 @@ upa_grpc_server_reactor_t* upa_grpc_server_get_reactor_n(
 upa_grpc_server_reactor_t* upa_grpc_server_get_reactor_i(
     upa_grpc_server_handler handler, int ract_idx);
 const char* upa_grpc_server_get_reactor_name(upa_grpc_server_handler handler,
+                                             upa_grpc_server_reactor_t* ract);
+int upa_grpc_server_get_reactor_idx(upa_grpc_server_handler handler,
                                              upa_grpc_server_reactor_t* ract);
 int upa_grpc_server_get_reactor_count(upa_grpc_server_handler handler);
 

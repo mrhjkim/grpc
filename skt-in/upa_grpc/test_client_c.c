@@ -113,7 +113,6 @@ final:
 void sendTestMessage(upa_grpc_client_handler handler) {
   while (!upa_grpc_client_wait_for_connected(handler, 5)) {
     printf("Wating for channel to be ready...\n");
-    upa_grpc_client_stop_reactor(handler);
   }
   printf("Current channel status is %d.\n", upa_grpc_client_get_state(handler));
 
@@ -145,6 +144,9 @@ int main(int argc, char** argv) {
   rv = upa_grpc_client_start(handler);
   if (rv < 0) return rv;
   sleep(5);
+  sendTestMessage(handler);
+  sleep(5);
+  upa_grpc_client_restart_reactor(handler);
   sendTestMessage(handler);
   sleep(1);
   upa_grpc_client_stop(handler);

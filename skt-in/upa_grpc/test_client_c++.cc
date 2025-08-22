@@ -66,7 +66,6 @@ int onClose(void* owner, void*) {
 void sendTestMessage(UpaGrpcClient* client) {
   while (!client->WaitForConnected(5)) {
     std::cout << "Wating for channel to be ready..." << std::endl;
-    client->StopReactor();
   }
   int status = client->GetState();
   std::cout << "Current channel status is " << status << "." << std::endl;
@@ -98,6 +97,7 @@ int main(int argc, char** argv) {
   sleep(5);
   sendTestMessage(&client);
   sleep(5);
+  client.RestartReactor();
   sendTestMessage(&client);
   sleep(1);
   client.Stop();

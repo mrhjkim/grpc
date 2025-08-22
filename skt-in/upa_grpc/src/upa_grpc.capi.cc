@@ -123,8 +123,13 @@ int upa_grpc_client_start_reactor(upa_grpc_client_handler handler) {
 }
 
 void upa_grpc_client_stop_reactor(upa_grpc_client_handler handler) {
-    if (!handler) return;
+  if (!handler) return;
   static_cast<UpaGrpcClient*>(handler)->StopReactor();
+}
+
+void upa_grpc_client_restart_reactor(upa_grpc_client_handler handler) {
+  if (!handler) return;
+  static_cast<UpaGrpcClient*>(handler)->RestartReactor();
 }
 
 int upa_grpc_client_get_state(upa_grpc_client_handler handler) {
@@ -328,6 +333,12 @@ const char* upa_grpc_server_get_reactor_name(upa_grpc_server_handler handler,
   if (!handler || !ract) return "";
   return static_cast<UpaGrpcServer*>(handler)
       ->GetReactorName(static_cast<UpaGrpcServerReactorClass*>(ract));
+}
+int upa_grpc_server_get_reactor_idx(upa_grpc_server_handler handler,
+                                    upa_grpc_server_reactor_t* ract) {
+  if (!handler || !ract) return -1;
+  return static_cast<UpaGrpcServer*>(handler)->GetReactorIdx(
+      static_cast<UpaGrpcServerReactorClass*>(ract));
 }
 
 int upa_grpc_server_get_reactor_count(upa_grpc_server_handler handler) {
