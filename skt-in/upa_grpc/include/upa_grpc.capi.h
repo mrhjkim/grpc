@@ -78,6 +78,7 @@ void upa_grpc_client_stop(upa_grpc_client_handler handler);
 int upa_grpc_client_start_reactor(upa_grpc_client_handler handler);
 void upa_grpc_client_stop_reactor(upa_grpc_client_handler handler);
 void upa_grpc_client_restart_reactor(upa_grpc_client_handler handler);
+int upa_grpc_client_is_start_reactor(upa_grpc_client_handler handler);
 int upa_grpc_client_get_state(upa_grpc_client_handler handler);
 int upa_grpc_client_wait_for_connected(upa_grpc_client_handler handler,
                                        int wait_sec);

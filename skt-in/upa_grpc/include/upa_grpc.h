@@ -144,9 +144,13 @@ class UpaGrpcClient {
   int min_backoff_ = 0;  // min reconnect backoff time (msec)
   int max_backoff_ = 0;  // max reconnect backoff time (msec)
   void *userdata_ = nullptr;
+  std::mutex mu_;
   UpaGrpcClientReactorClass* reactor_ = nullptr;
-  int last_channel_state_ = GRPC_CHANNEL_IDLE;
+  std::atomic<int> last_channel_state_ = GRPC_CHANNEL_IDLE;
   std::atomic<bool> start_flag_ = false;
+
+  int getState();   
+  int deleteReactor();
 };
 
 /**
@@ -196,7 +200,8 @@ class UpaGrpcServer {
 
   UpaGrpcServerReactorClass* GetReactor(std::string name);
   UpaGrpcServerReactorClass* GetReactor(int idx);
-  int SetReactor(UpaGrpcServerReactorClass* reactor);
+  int SetReactor(UpaGrpcServerReactorClass* reactor, bool* changed);
+  int DeleteReactor(UpaGrpcServerReactorClass* reactor);
   int DeleteReactor(std::string name);
   int DeleteReactor(int idx);
   const char* GetReactorName(UpaGrpcServerReactorClass* reactor);
@@ -217,10 +222,14 @@ class UpaGrpcServer {
   UpaGrpcOnCloseCallback callback_close_ = nullptr;
   void* userdata_ = nullptr;
   std::unique_ptr<grpc::Server> server_ = nullptr;
+  std::mutex mu_;
 
   UpaGrpcServerReactorClass* reactor_array_[MAX_UPA_GRPC_SERVER_REACTOR];
   void initReactorArray();
- // TODO: lock 추가, 구조개선(reactor array 관리 class??)
+
+  int getReactorIdx(UpaGrpcServerReactorClass* reactor);
+  UpaGrpcServerReactorClass* getReactor(std::string name);
+  UpaGrpcServerReactorClass* getReactor(int idx);
 };
 
 

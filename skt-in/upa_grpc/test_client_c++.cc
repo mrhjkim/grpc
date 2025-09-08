@@ -94,12 +94,19 @@ int main(int argc, char** argv) {
 
   int rv = client.Start();
   if (rv < 0) return rv;
-  sleep(5);
+  while(1) {
+    int state = client.GetState();
+    std::cout << "GetState - " << state << "\n";
+    if( state == GRPC_CHANNEL_READY) break;
+    sleep(1);
+  }
+
   sendTestMessage(&client);
-  sleep(5);
+  sleep(2);
   client.RestartReactor();
+  sleep(5);
   sendTestMessage(&client);
-  sleep(1);
+  sleep(2);
   client.Stop();
 
   sleep(5);
@@ -108,8 +115,10 @@ int main(int argc, char** argv) {
   if (rv < 0) return rv;
   sleep(5);
   sendTestMessage(&client);
-  sleep(1);
+  sleep(2);
   client.Stop();
+
+  sleep(2);
 
   return 0;
 }

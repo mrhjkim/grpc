@@ -132,6 +132,11 @@ void upa_grpc_client_restart_reactor(upa_grpc_client_handler handler) {
   static_cast<UpaGrpcClient*>(handler)->RestartReactor();
 }
 
+int upa_grpc_client_is_start_reactor(upa_grpc_client_handler handler) {
+  if (!handler) return 0;
+  return (static_cast<UpaGrpcClient*>(handler)->GetReactor() == nullptr) ? 0 : 1;
+}
+
 int upa_grpc_client_get_state(upa_grpc_client_handler handler) {
   if (!handler) return -1;
   return static_cast<UpaGrpcClient*>(handler)->GetState();

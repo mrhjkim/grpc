@@ -145,10 +145,11 @@ int main(int argc, char** argv) {
   if (rv < 0) return rv;
   sleep(5);
   sendTestMessage(handler);
-  sleep(5);
+  sleep(2);
   upa_grpc_client_restart_reactor(handler);
+  sleep(5);
   sendTestMessage(handler);
-  sleep(1);
+  sleep(2);
   upa_grpc_client_stop(handler);
 
   sleep(5);
@@ -157,8 +158,10 @@ int main(int argc, char** argv) {
   if (rv < 0) return rv;
   sleep(5);
   sendTestMessage(handler);
-  sleep(1);
+  sleep(2);
   upa_grpc_client_stop(handler);
+
+  sleep(2);
 
   return 0;
 }

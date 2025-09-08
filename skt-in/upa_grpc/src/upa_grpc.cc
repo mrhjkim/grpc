@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <sstream>
 #include <thread>
@@ -116,9 +117,6 @@ class UpaGrpcClientReactorClass final : public UpaGrpcClientReactor {
 
     StartRead(&read_msg_);  // Start reading
     StartCall();
-
-    // 연결 상태 변경 시 on connect/close callback 호출된다.
-    if (owner_) owner_->GetState();
   }
 
   ~UpaGrpcClientReactorClass() {
@@ -150,7 +148,6 @@ class UpaGrpcClientReactorClass final : public UpaGrpcClientReactor {
 
   void OnDone(const grpc::Status& status) override {
     // RPC failed or finished cleanly
-
     delete this;
   }
 
@@ -210,12 +207,14 @@ int UpaGrpcClient::Start() {
 void UpaGrpcClient::Stop() {
   if( start_flag_ == true ) {
     StopReactor();
-    GetState();
+    // DeleteReactor();
     start_flag_ = false;
   }
 }
 
 int UpaGrpcClient::StartReactor() {
+  std::lock_guard<std::mutex> lock(mu_);
+
   std::shared_ptr<grpc::Channel> channel = nullptr;
   std::unique_ptr<UpaGrpcService::Stub> stub = nullptr;
 
@@ -223,7 +222,7 @@ int UpaGrpcClient::StartReactor() {
     std::cout << "Already started grpc client reactor." << std::endl;
     return 1;
   }
-  if( start_flag_ == false ) {
+  if (start_flag_ == false) {
     std::cout << "Do not started grpc client." << std::endl;
     return -1;
   }
@@ -257,14 +256,17 @@ int UpaGrpcClient::StartReactor() {
   reactor_ =
       new UpaGrpcClientReactorClass(std::move(channel), std::move(stub), this);
 
+  getState();
+
   return 0;
 }
 
 void UpaGrpcClient::StopReactor() {
+  std::lock_guard<std::mutex> lock(mu_);
   if (reactor_ != nullptr) {
     reactor_->Close();
-    DeleteReactor();
-    GetState();
+    reactor_ = nullptr;
+    getState();
   }
 }
 
@@ -277,17 +279,25 @@ void UpaGrpcClient::RestartReactor() {
 /// on connect / close callback 등록된 경우 연결 상태 변경 확인 시 호출한다.
 /// @return channel state (GRPC_CHANNEL_IDLE/CONNECTING/READY/FAILURE/SHUTWODN)
 int UpaGrpcClient::GetState() {
-  int state = GRPC_CHANNEL_IDLE;
-  if (reactor_ != nullptr) state = reactor_->GetState();
+  // server shutdown 등으로 reactor 객체가 OnDone callback 처리 후
+  // 소멸 되는 경우가 있을 수 있다. 이 경우 해당 객체를 생성해준다.
+  if (GetReactor() == nullptr && start_flag_ == true) StartReactor();
 
-  if (last_channel_state_ != GRPC_CHANNEL_READY &&
-      state == GRPC_CHANNEL_READY) {
+  std::lock_guard<std::mutex> lock(mu_);
+  return getState();
+}
+int UpaGrpcClient::getState() {
+  int state = GRPC_CHANNEL_IDLE;
+  int last_state = last_channel_state_;
+
+  if (reactor_ != nullptr) state = reactor_->GetState();
+  last_channel_state_ = state;
+
+  if (last_state != GRPC_CHANNEL_READY && state == GRPC_CHANNEL_READY) {
     if (callback_connect_) callback_connect_(this, nullptr);
-  } else if (last_channel_state_ == GRPC_CHANNEL_READY &&
-             state != GRPC_CHANNEL_READY) {
+  } else if (last_state == GRPC_CHANNEL_READY && state != GRPC_CHANNEL_READY) {
     if (callback_close_) callback_close_(this, nullptr);
   }
-  last_channel_state_ = state;
 
   return state;
 }
@@ -296,16 +306,12 @@ int UpaGrpcClient::GetState() {
 /// @param wait_sec 대기시간 (단위:초)
 /// @return true: ready 상태, false: 그 외 상태
 bool UpaGrpcClient::WaitForConnected(int wait_sec) {
-  if (reactor_ == nullptr) {
-    sleep(wait_sec > 0 ? wait_sec : 1);
+  // server shutdown 등으로 reactor 객체가 OnDone callback 처리 후
+  // 소멸 되는 경우가 있을 수 있다. 이 경우 해당 객체를 생성해준다.
+  if (GetReactor() == nullptr && start_flag_ == true) StartReactor();
 
-    // server shutdown 등으로 reactor 객체가 OnDone callback 처리 후
-    // 소멸 되는 경우가 있을 수 있다. 이 경우 해당 객체를 생성해준다.
-    if (start_flag_ == true) StartReactor();
-
-    if (reactor_ == nullptr) return false;
-  }
-
+  std::lock_guard<std::mutex> lock(mu_);
+  if (reactor_ == nullptr) return false;
   return reactor_->WaitForConnected(wait_sec);
 }
 
@@ -361,14 +367,17 @@ void* UpaGrpcClient::GetUserData() { return userdata_; }
 void UpaGrpcClient::SetUserData(void* userdata) { userdata_ = userdata; }
 
 UpaGrpcClientReactorClass* UpaGrpcClient::GetReactor() {
+  std::lock_guard<std::mutex> lock(mu_);
   return reactor_;
 }
 int UpaGrpcClient::SetReactor(UpaGrpcClientReactorClass* reactor) {
+  std::lock_guard<std::mutex> lock(mu_);
   if(reactor_ != nullptr) return -1; // already exists
   reactor_ = reactor;
   return 0;
 }
 int UpaGrpcClient::DeleteReactor() {
+  std::lock_guard<std::mutex> lock(mu_);
   if (reactor_ == nullptr) return -1;  // not exists
   reactor_ = nullptr;
   return 0;
@@ -382,8 +391,10 @@ int UpaGrpcClient::Send(Message* msg) {
 
   // server shutdown 등으로 reactor 객체가 OnDone callback 처리 후
   // 소멸 되는 경우가 있을 수 있다. 이 경우 해당 객체를 생성해준다.
-  if (reactor_ == nullptr) StartReactor();
-  if (GetState() != GRPC_CHANNEL_READY) return -1;  // not opened
+  if (GetReactor() == nullptr) StartReactor();
+
+  std::lock_guard<std::mutex> lock(mu_);
+  if (getState() != GRPC_CHANNEL_READY) return -1;  // not opened
 
   msg->set_msg_type(msg_type_);
 
@@ -407,7 +418,7 @@ class UpaGrpcServiceImpl final : public UpaGrpcService::CallbackService {
   UpaGrpcOnAcceptCallback GetOnAccept();
   UpaGrpcOnCloseCallback GetOnClose();
   bool CheckReactor(UpaGrpcServerReactorClass* reactor);
-  int DeleteReactor(std::string name);
+  int DeleteReactor(UpaGrpcServerReactorClass* reactor);
 
   // This function is called by gRPC when a new RPC arrives
   UpaGrpcServerReactor* SendMessage(
@@ -435,7 +446,6 @@ class UpaGrpcServerReactorClass final : public UpaGrpcServerReactor {
  private:
   grpc::CallbackServerContext* context_;
   UpaGrpcServiceImpl* owner_;
-  UpaGrpcServerReactorClass* reactor_ = nullptr;
   std::string name_;
   Message read_msg_;
 };
@@ -450,7 +460,7 @@ UpaGrpcServerReactorClass::UpaGrpcServerReactorClass(
 UpaGrpcServerReactorClass::~UpaGrpcServerReactorClass() {
   UpaGrpcOnCloseCallback onClose = nullptr;
   if (owner_->CheckReactor(this) == true) onClose = owner_->GetOnClose();
-  owner_->DeleteReactor(name_);
+  owner_->DeleteReactor(this);
   if (onClose) {
     onClose(owner_->GetUpaGrpcServer(), this);
   } else {
@@ -514,8 +524,8 @@ bool UpaGrpcServiceImpl::CheckReactor(UpaGrpcServerReactorClass* reactor) {
   if (owner_->GetReactorIdx(reactor) < 0) return false;
   return true;
 }
-int UpaGrpcServiceImpl::DeleteReactor(std::string name) {
-  return owner_->DeleteReactor(name);
+int UpaGrpcServiceImpl::DeleteReactor(UpaGrpcServerReactorClass* reactor) {
+  return owner_->DeleteReactor(reactor);
 }
 
 // This function is called by gRPC when a new RPC arrives
@@ -524,19 +534,22 @@ UpaGrpcServerReactor* UpaGrpcServiceImpl::SendMessage(
   UpaGrpcServerReactorClass* reactor =
       new UpaGrpcServerReactorClass(context, this);
 
-  int rv = owner_->SetReactor(reactor);
+  bool changed = false;
+  int rv = owner_->SetReactor(reactor, &changed);
   if (rv < 0) {
     std::cout << "Alreay exists reactor or full reactor array." << std::endl;
     delete reactor;
     return nullptr;
   }
 
-  UpaGrpcOnAcceptCallback onAccept = owner_->GetOnAccept();
-  if (onAccept) {
-    onAccept(owner_, reactor);
-  } else {
-    std::cout << "Accepted channel. peer[" << context->peer() << "]"
-              << std::endl;
+  if (changed == false) {
+    UpaGrpcOnAcceptCallback onAccept = owner_->GetOnAccept();
+    if (onAccept) {
+      onAccept(owner_, reactor);
+    } else {
+      std::cout << "Accepted channel. peer[" << context->peer() << "]"
+                << std::endl;
+    }
   }
 
   return reactor;
@@ -592,6 +605,7 @@ void UpaGrpcServer::Stop() {
 }
 
 void UpaGrpcServer::StopReactor(UpaGrpcServerReactorClass* reactor) {
+  std::lock_guard<std::mutex> lock(mu_);
   if (reactor == nullptr) return;
   reactor->Close();
 }
@@ -651,6 +665,10 @@ void UpaGrpcServer::initReactorArray() {
   }
 }
 UpaGrpcServerReactorClass* UpaGrpcServer::GetReactor(std::string name) {
+  std::lock_guard<std::mutex> lock(mu_);
+  return getReactor(name);
+}
+UpaGrpcServerReactorClass* UpaGrpcServer::getReactor(std::string name) {
   for (int i = 0; i < MAX_UPA_GRPC_SERVER_REACTOR; i++) {
     if (reactor_array_[i] == nullptr) continue;
     if (reactor_array_[i]->GetName() == name) return reactor_array_[i];
@@ -658,11 +676,27 @@ UpaGrpcServerReactorClass* UpaGrpcServer::GetReactor(std::string name) {
   return nullptr;
 }
 UpaGrpcServerReactorClass* UpaGrpcServer::GetReactor(int idx) {
+  std::lock_guard<std::mutex> lock(mu_);
+  return getReactor(idx);
+}
+UpaGrpcServerReactorClass* UpaGrpcServer::getReactor(int idx) {
   if (idx < 0 || idx >= MAX_UPA_GRPC_SERVER_REACTOR) return nullptr;
   return reactor_array_[idx];
 }
-int UpaGrpcServer::SetReactor(UpaGrpcServerReactorClass* reactor) {
-  if (GetReactor(reactor->GetName()) != nullptr) return -1;  // Already exists
+int UpaGrpcServer::SetReactor(UpaGrpcServerReactorClass* reactor,
+                              bool* changed) {
+  std::lock_guard<std::mutex> lock(mu_);
+  if (changed != nullptr) *changed = false;
+  if (getReactorIdx(reactor) >= 0) return -1;  // Already exists
+  // reactor class pointer가 다른 경우 주소를 교체해준다.
+  for (int i = 0; i < MAX_UPA_GRPC_SERVER_REACTOR; i++) {
+    if (reactor_array_[i] == nullptr) continue;
+    if (strcasecmp(reactor_array_[i]->GetName(), reactor->GetName()) == 0) {
+      reactor_array_[i] = reactor;
+      if (changed != nullptr) *changed = true;
+      return i;
+    }
+  }
   for (int i = 0; i < MAX_UPA_GRPC_SERVER_REACTOR; i++) {
     if (reactor_array_[i] == nullptr) {
       reactor_array_[i] = reactor;
@@ -671,10 +705,18 @@ int UpaGrpcServer::SetReactor(UpaGrpcServerReactorClass* reactor) {
   }
   return -1;  // Reactor array fulled
 }
+int UpaGrpcServer::DeleteReactor(UpaGrpcServerReactorClass* reactor) {
+  std::lock_guard<std::mutex> lock(mu_);
+  int idx = getReactorIdx(reactor);
+  if (idx < 0) return -1;  // not found
+  reactor_array_[idx] = nullptr;
+  return 0;
+}
 int UpaGrpcServer::DeleteReactor(std::string name) {
+  std::lock_guard<std::mutex> lock(mu_);
   for (int i = 0; i < MAX_UPA_GRPC_SERVER_REACTOR; i++) {
     if (reactor_array_[i] == nullptr) continue;
-    if (reactor_array_[i]->GetName() == name) {
+    if (strcasecmp(reactor_array_[i]->GetName(), name.c_str()) == 0) {
       reactor_array_[i] = nullptr;
       return 0;
     }
@@ -682,12 +724,14 @@ int UpaGrpcServer::DeleteReactor(std::string name) {
   return -1;  // not found
 }
 int UpaGrpcServer::DeleteReactor(int idx) {
+  std::lock_guard<std::mutex> lock(mu_);
   if (idx < 0 || idx >= MAX_UPA_GRPC_SERVER_REACTOR) return -1;
   reactor_array_[idx] = nullptr;
   return 0;
 }
 
 const char* UpaGrpcServer::GetReactorName(UpaGrpcServerReactorClass* reactor) {
+  std::lock_guard<std::mutex> lock(mu_);
 #if 0  // reactor 객체에 등록되어있는 name을 그냥 리턴한다.
   for (int i = 0; i < MAX_UPA_GRPC_SERVER_REACTOR; i++) {
     if (reactor_array_[i] == nullptr) continue;
@@ -701,11 +745,16 @@ const char* UpaGrpcServer::GetReactorName(UpaGrpcServerReactorClass* reactor) {
 }
 const char* UpaGrpcServer::GetReactorName(int idx) {
   if (idx < 0 || idx >= MAX_UPA_GRPC_SERVER_REACTOR) return "";
+  std::lock_guard<std::mutex> lock(mu_);
   if (reactor_array_[idx] == nullptr) return "";  // not found
   return reactor_array_[idx]->GetName();
 }
 
 int UpaGrpcServer::GetReactorIdx(UpaGrpcServerReactorClass* reactor) {
+  std::lock_guard<std::mutex> lock(mu_);
+  return getReactorIdx(reactor);
+}
+int UpaGrpcServer::getReactorIdx(UpaGrpcServerReactorClass* reactor) {
   if (reactor == nullptr) return -1;  // invalid parameter
   for (int i = 0; i < MAX_UPA_GRPC_SERVER_REACTOR; i++) {
     if (reactor_array_[i] == nullptr) continue;
@@ -715,6 +764,7 @@ int UpaGrpcServer::GetReactorIdx(UpaGrpcServerReactorClass* reactor) {
 }
 
 int UpaGrpcServer::GetReactorCount() {
+  std::lock_guard<std::mutex> lock(mu_);
   int count = 0;
   for (int i = 0; i < MAX_UPA_GRPC_SERVER_REACTOR; i++) {
     if (reactor_array_[i] != nullptr) count += 1;
@@ -729,7 +779,9 @@ int UpaGrpcServer::GetReactorCount() {
 int UpaGrpcServer::Send(Message* msg, UpaGrpcServerReactorClass* reactor) {
   if (msg == nullptr || reactor == nullptr) return -1;  // invalid parameters
 
-  if (GetReactorIdx(reactor) < 0) return -1;  // not found reactor
+  std::lock_guard<std::mutex> lock(mu_);
+
+  if (getReactorIdx(reactor) < 0) return -1;  // not found reactor
 
   reactor->StartWrite(msg);
 
@@ -743,7 +795,9 @@ int UpaGrpcServer::Send(Message* msg, UpaGrpcServerReactorClass* reactor) {
 int UpaGrpcServer::Send(Message* msg, std::string reactor_name) {
   if (msg == nullptr || reactor_name == "") return -1;  // invalid parameters
 
-  UpaGrpcServerReactorClass* reactor = GetReactor(reactor_name);
+  std::lock_guard<std::mutex> lock(mu_);
+
+  UpaGrpcServerReactorClass* reactor = getReactor(reactor_name);
   if (reactor == nullptr) return -1;  // not found reactor
 
   reactor->StartWrite(msg);
@@ -758,7 +812,9 @@ int UpaGrpcServer::Send(Message* msg, std::string reactor_name) {
 int UpaGrpcServer::Send(Message* msg, int reactor_idx) {
   if (msg == nullptr || reactor_idx < 0) return -1;  // invalid parameters
 
-  UpaGrpcServerReactorClass* reactor = GetReactor(reactor_idx);
+  std::lock_guard<std::mutex> lock(mu_);
+
+  UpaGrpcServerReactorClass* reactor = getReactor(reactor_idx);
   if (reactor == nullptr) return -1;  // not found reactor
 
   reactor->StartWrite(msg);
