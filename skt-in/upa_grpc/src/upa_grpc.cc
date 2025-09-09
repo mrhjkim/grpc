@@ -3,6 +3,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <queue>
 #include <string>
 #include <sstream>
 #include <thread>
@@ -142,13 +143,47 @@ class UpaGrpcClientReactorClass final : public UpaGrpcClientReactor {
     StartRead(&read_msg_);  // Continue reading
   }
 
-  void OnWriteDone(bool /*ok*/) override {
-    // write failed or stream closed by server
+  void OnWriteDone(bool ok) override {
+    std::lock_guard<std::mutex> lock(mu_);
+
+    // write 진행한 메시지 해제
+    start_write_flag_ = false;
+    if (!send_msgs_.empty()) {
+      auto msg = std::move(send_msgs_.front());
+      send_msgs_.pop();
+      msg.reset();
+    }
+
+    if (!ok) {  // write failed or stream closed by server
+      return;
+    }
+
+    // 대기중인 메시지가 있으면 추가로 전송
+    if (!send_msgs_.empty()) {
+      start_write_flag_ = true;
+      auto msg = std::move(send_msgs_.front());
+      send_msgs_.pop();
+      StartWrite(msg.get());
+    }
   }
 
   void OnDone(const grpc::Status& status) override {
+    std::lock_guard<std::mutex> lock(mu_);
+    start_write_flag_ = false;
+    send_msgs_ = {};
+
     // RPC failed or finished cleanly
     delete this;
+  }
+
+  void Send(Message *msg) {
+    std::lock_guard<std::mutex> lock(mu_);
+    auto msg_ = std::make_unique<Message>(*msg);
+    if (start_write_flag_ == false) {  // write 진행중이 아니라면 전송한다.
+      start_write_flag_ = true;
+      StartWrite(msg_.get());
+    }
+    send_msgs_.push(std::move(msg_));
   }
 
   void Close() {
@@ -190,6 +225,9 @@ class UpaGrpcClientReactorClass final : public UpaGrpcClientReactor {
   UpaGrpcClient* owner_;
   grpc::ClientContext ctx_;
   Message read_msg_;
+  bool start_write_flag_ = false;
+  std::queue<std::unique_ptr<Message>> send_msgs_;
+  std::mutex mu_;
   std::unique_ptr<grpc::CompletionQueue> cq_{new grpc::CompletionQueue};
 };
 
@@ -293,11 +331,13 @@ int UpaGrpcClient::getState() {
   if (reactor_ != nullptr) state = reactor_->GetState();
   last_channel_state_ = state;
 
+  mu_.unlock();
   if (last_state != GRPC_CHANNEL_READY && state == GRPC_CHANNEL_READY) {
     if (callback_connect_) callback_connect_(this, nullptr);
   } else if (last_state == GRPC_CHANNEL_READY && state != GRPC_CHANNEL_READY) {
     if (callback_close_) callback_close_(this, nullptr);
   }
+  mu_.lock();
 
   return state;
 }
@@ -398,7 +438,7 @@ int UpaGrpcClient::Send(Message* msg) {
 
   msg->set_msg_type(msg_type_);
 
-  reactor_->StartWrite(msg);
+  reactor_->Send(msg);
 
   return 0;
 }
@@ -435,9 +475,10 @@ class UpaGrpcServerReactorClass final : public UpaGrpcServerReactor {
   ~UpaGrpcServerReactorClass();
 
   void OnReadDone(bool ok) override;
-  void OnWriteDone(bool /*ok*/) override;
+  void OnWriteDone(bool ok) override;
   void OnDone() override;
 
+  void Send(Message *msg);
   void Close();
 
   void SetName(std::string name);
@@ -448,6 +489,9 @@ class UpaGrpcServerReactorClass final : public UpaGrpcServerReactor {
   UpaGrpcServiceImpl* owner_;
   std::string name_;
   Message read_msg_;
+  bool start_write_flag_ = false;
+  std::queue<std::unique_ptr<Message>> send_msgs_;
+  std::mutex mu_;
 };
 
 UpaGrpcServerReactorClass::UpaGrpcServerReactorClass(
@@ -490,17 +534,50 @@ void UpaGrpcServerReactorClass::OnReadDone(bool ok) {
   }
 }
 
-void UpaGrpcServerReactorClass::OnWriteDone(bool /*ok*/) {
-  // write failed or stream closed by client
+void UpaGrpcServerReactorClass::OnWriteDone(bool ok) {
+  std::lock_guard<std::mutex> lock(mu_);
+
+  // write 진행한 메시지 해제
+  start_write_flag_ = false;
+  if (!send_msgs_.empty()) {
+    auto msg = std::move(send_msgs_.front());
+    send_msgs_.pop();
+    msg.reset();
+  }
+
+  if (!ok) {  // write failed or stream closed by client
+    return;
+  }
+
+  // 대기중인 메시지가 있으면 추가로 전송
+  if (!send_msgs_.empty()) {
+    start_write_flag_ = true;
+    auto msg = std::move(send_msgs_.front());
+    send_msgs_.pop();
+    StartWrite(msg.get());
+  }
 }
 
 void UpaGrpcServerReactorClass::OnDone() {
+  std::lock_guard<std::mutex> lock(mu_);
+  start_write_flag_ = false;
+  send_msgs_ = {};
+
   // RPC finished
   delete this;
 }
 
+void UpaGrpcServerReactorClass::Send(Message *msg) {
+  std::lock_guard<std::mutex> lock(mu_);
+  auto msg_ = std::make_unique<Message>(*msg);
+  if (start_write_flag_ == false) {  // write 진행중이 아니라면 전송한다.
+    start_write_flag_ = true;
+    StartWrite(msg_.get());
+  }
+  send_msgs_.push(std::move(msg_));
+}
+
 void UpaGrpcServerReactorClass::Close() {
-  OnWriteDone(true);
   if (context_ != nullptr) {
     context_->TryCancel();  // RPC 전체 취소, TCP close와 유사
   }
@@ -783,7 +860,7 @@ int UpaGrpcServer::Send(Message* msg, UpaGrpcServerReactorClass* reactor) {
 
   if (getReactorIdx(reactor) < 0) return -1;  // not found reactor
 
-  reactor->StartWrite(msg);
+  reactor->Send(msg);
 
   return 0;
 }
@@ -800,7 +877,7 @@ int UpaGrpcServer::Send(Message* msg, std::string reactor_name) {
   UpaGrpcServerReactorClass* reactor = getReactor(reactor_name);
   if (reactor == nullptr) return -1;  // not found reactor
 
-  reactor->StartWrite(msg);
+  reactor->Send(msg);
 
   return 0;
 }
@@ -817,7 +894,7 @@ int UpaGrpcServer::Send(Message* msg, int reactor_idx) {
   UpaGrpcServerReactorClass* reactor = getReactor(reactor_idx);
   if (reactor == nullptr) return -1;  // not found reactor
 
-  reactor->StartWrite(msg);
+  reactor->Send(msg);
 
   return 0;
 }

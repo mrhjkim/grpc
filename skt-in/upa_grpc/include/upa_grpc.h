@@ -150,7 +150,6 @@ class UpaGrpcClient {
   std::atomic<bool> start_flag_ = false;
 
   int getState();   
-  int deleteReactor();
 };
 
 /**
