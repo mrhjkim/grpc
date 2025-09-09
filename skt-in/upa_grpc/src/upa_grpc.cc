@@ -161,9 +161,7 @@ class UpaGrpcClientReactorClass final : public UpaGrpcClientReactor {
     // 대기중인 메시지가 있으면 추가로 전송
     if (!send_msgs_.empty()) {
       start_write_flag_ = true;
-      auto msg = std::move(send_msgs_.front());
-      send_msgs_.pop();
-      StartWrite(msg.get());
+      StartWrite(send_msgs_.front().get());
     }
   }
 
@@ -552,9 +550,7 @@ void UpaGrpcServerReactorClass::OnWriteDone(bool ok) {
   // 대기중인 메시지가 있으면 추가로 전송
   if (!send_msgs_.empty()) {
     start_write_flag_ = true;
-    auto msg = std::move(send_msgs_.front());
-    send_msgs_.pop();
-    StartWrite(msg.get());
+    StartWrite(send_msgs_.front().get());
   }
 }
 
